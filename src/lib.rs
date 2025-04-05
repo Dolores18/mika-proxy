@@ -259,7 +259,14 @@ pub async fn start_proxy_server(
     info!("启动代理服务器");
     info!("地址列表: {:?}", server_addrs);
     info!("服务器配置: {:?}", server_config);
+      // 修改代理地址创建方式
+    let server_config_clone = Arc::new(server_config.clone());
+    let proxy_addr = server_config_clone.create_fixed_adrr();
 
+    // 创建 Shadowsocks 工厂，使用配置中的密钥
+    let psd = &app_config.features.ss_key;
+    let key = BASE64.decode(psd).expect("Failed to decode");
+    let key: [u8; 16] = key.try_into().expect("Invalid key length");
     // 创建域名规则集合并包装在 Arc 中
     let direct_domains = Arc::new(load_direct_domains(&app_config));
 
@@ -286,11 +293,20 @@ pub async fn start_proxy_server(
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
     //创建doh重定向工厂
+    let doh_redirect_factory = Arc::new(StreamRedirectOutboundFactory {
+        remote_peer: proxy_addr.clone(),
+        next: Arc::downgrade(&doh_tcp_factory) as Weak<dyn StreamOutboundFactory>,
+    });
+    //创建doh ss加密工厂
+    let doh_ss_factory = Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
+        key,
+        Arc::downgrade(&doh_redirect_factory) as Weak<dyn StreamOutboundFactory>,
+    ));
 
     // 创建 DoH 工厂时使用配置中指定的 DoH 服务器
     let doh_factories = vec![DohDatagramAdapterFactory::new(
         app_config.dns.doh.parse().unwrap(), // 使用配置中的中国 DoH 服务器
-        Arc::downgrade(&socket_outbound_factory) as Weak<dyn StreamOutboundFactory>,
+        Arc::downgrade(&doh_ss_factory) as Weak<dyn StreamOutboundFactory>,
     )];
     println!("Created DoH client for URL: {}", app_config.dns.doh);
 
@@ -307,20 +323,14 @@ pub async fn start_proxy_server(
     // 统计对象
     let stat = forward::StatHandle::default();
     
-    // 修改代理地址创建方式
-    let server_config_clone = Arc::new(server_config.clone());
-    let proxy_addr = server_config_clone.create_fixed_adrr();
-
+  
     // 创建重定向工厂
     let redirect_factory = Arc::new(StreamRedirectOutboundFactory {
-        remote_peer: proxy_addr,
+        remote_peer: proxy_addr.clone(),
         next: Arc::downgrade(&socket_outbound_factory2) as Weak<dyn StreamOutboundFactory>,
     });
 
-    // 创建 Shadowsocks 工厂，使用配置中的密钥
-    let psd = &app_config.features.ss_key;
-    let key = BASE64.decode(psd).expect("Failed to decode");
-    let key: [u8; 16] = key.try_into().expect("Invalid key length");
+
 
     let ss_factory = Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
         key,

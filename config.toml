@@ -13,7 +13,9 @@ china_doh = "https://1.12.12.12/dns-query"
 # 国际 DoH 服务器
 global_doh = "https://1.1.1.1/dns-query"
 # 通用DoH服务器
-doh = "https://1.1.1.1/dns-query"
+doh = "https://94.140.14.14/resolve"
+# 备用DoH服务器
+adg = "https://94.140.14.14/resolve"
 
 # 功能配置
 [features]

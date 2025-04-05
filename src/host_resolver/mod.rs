@@ -19,6 +19,8 @@ use crate::SystemResolver;
 use lazy_static::lazy_static;
 use udp_adapter::*;
 
+pub mod dns_packet_parser;
+
 #[derive(Clone)]
 struct FlowRuntime {}
 

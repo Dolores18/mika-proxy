@@ -15,7 +15,7 @@ use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use log::info;
 use tokio::sync::mpsc;
 use tokio_util::sync::PollSender;
-
+use crate::host_resolver::dns_packet_parser;
 use crate::flow::*;
 use crate::h2::{FlowAdapterConnector, TokioHyperExecutor};
 
@@ -29,7 +29,7 @@ enum DohDatagramAdapterTxState {
     #[default]
     Idle,
     PendingResponse(ResponseFuture),
-    ReadingResponse(Body, Vec<Bytes>),
+    ReadingResponse(Body, Vec<Bytes>, u16),
 }
 
 struct DohDatagramAdapter {
@@ -37,6 +37,7 @@ struct DohDatagramAdapter {
     client: HyperClient<HttpsConnector<FlowAdapterConnector>, Body>,
     tx_state: DohDatagramAdapterTxState,
     rx_chan: (Option<PollSender<Buffer>>, mpsc::Receiver<Buffer>),
+    current_query_id: u16,
 }
 
 impl DohDatagramAdapterFactory {
@@ -80,6 +81,7 @@ impl DatagramSessionFactory for DohDatagramAdapterFactory {
             tx_state: Default::default(),
             rx_chan: (Some(PollSender::new(rx_tx)), rx_rx),
             url: self.url.clone(),
+            current_query_id: 0,
         }))
     }
 }
@@ -108,16 +110,22 @@ impl DatagramSession for DohDatagramAdapter {
                 DohDatagramAdapterTxState::PendingResponse(mut fut) => match fut.poll_unpin(cx) {
                     Poll::Ready(Ok(resp)) => {
                         println!("Received DoH response with status: {}", resp.status());
+                        
+                        // 使用成员变量中的查询ID
+                        let query_id = self.current_query_id;
+                        
                         if resp.status().is_success() {
                             self.tx_state = DohDatagramAdapterTxState::ReadingResponse(
                                 resp.into_body(),
                                 Vec::new(),
+                                query_id,  // 传递查询ID
                             );
                         } else {
                             let status = resp.status();
                             self.tx_state = DohDatagramAdapterTxState::ReadingResponse(
                                 resp.into_body(),
                                 Vec::new(),
+                                query_id,  // 传递查询ID
                             );
                             println!("Error status: {}, reading error body...", status);
                         }
@@ -131,7 +139,7 @@ impl DatagramSession for DohDatagramAdapter {
                         break Poll::Pending;
                     }
                 },
-                DohDatagramAdapterTxState::ReadingResponse(mut body, mut byte_bufs) => {
+                DohDatagramAdapterTxState::ReadingResponse(mut body, mut byte_bufs, query_id) => {
                     let current_buf_len = byte_bufs.iter().map(|c| c.len()).sum();
                     match Pin::new(&mut body).poll_data(cx) {
                         Poll::Ready(None) => {
@@ -143,10 +151,35 @@ impl DatagramSession for DohDatagramAdapter {
                                 "Successfully received DoH response with {} bytes",
                                 current_buf_len
                             );
-                            info!(
-                                "Response content (first 50 bytes): {:?}",
-                                &buf[..50.min(buf.len())]
-                            );
+                            
+                            // 检查URL是否为JSON API端点
+                            let path = self.url.path();
+                            let is_json_api = path.ends_with("/resolve") || path.ends_with("/resolver");
+                            
+                            if is_json_api {
+                                // 打印JSON响应内容
+                                match std::str::from_utf8(&buf) {
+                                    Ok(json_str) => {
+                                        println!("JSON API Response: {}", json_str);
+                                        
+                                        // 将JSON解析为DNS响应，使用传递的查询ID
+                                        if let Some(dns_packet) = crate::host_resolver::dns_packet_parser::json_to_dns_message(json_str, query_id) {
+                                            println!("成功将JSON转换为DNS二进制包，长度: {}, 查询ID: {}", dns_packet.len(), query_id);
+                                            buf = dns_packet;
+                                        } else {
+                                            println!("错误：无法将JSON转换为DNS包");
+                                        }
+                                    },
+                                    Err(_) => println!("JSON API Response: 无法解析为UTF-8字符串")
+                                }
+                            } else {
+                                // 对于标准二进制响应，只打印前面一部分
+                                info!(
+                                    "Standard DoH response (first 50 bytes): {:?}",
+                                    &buf[..50.min(buf.len())]
+                                );
+                            }
+                            
                             if tx.start_send_unpin(buf).is_err() {
                                 self.rx_chan.0 = None;
                             }
@@ -157,14 +190,19 @@ impl DatagramSession for DohDatagramAdapter {
                             self.rx_chan.0 = None;
                         }
                         Poll::Ready(Some(Ok(chunk))) => {
-                            info!("Response chunk: {:?}", String::from_utf8_lossy(&chunk));
+                            // 打印每个响应块
+                            if let Ok(chunk_str) = std::str::from_utf8(&chunk) {
+                                info!("Response chunk: {}", chunk_str);
+                            } else {
+                                info!("Response chunk (binary): {} bytes", chunk.len());
+                            }
                             byte_bufs.push(chunk);
                             self.tx_state =
-                                DohDatagramAdapterTxState::ReadingResponse(body, byte_bufs);
+                                DohDatagramAdapterTxState::ReadingResponse(body, byte_bufs, query_id);
                         }
                         Poll::Pending => {
                             self.tx_state =
-                                DohDatagramAdapterTxState::ReadingResponse(body, byte_bufs);
+                                DohDatagramAdapterTxState::ReadingResponse(body, byte_bufs, query_id);
                             break Poll::Pending;
                         }
                     }
@@ -176,21 +214,73 @@ impl DatagramSession for DohDatagramAdapter {
     fn send_to(&mut self, _remote_peer: DestinationAddr, buf: Buffer) {
         info!("Sending DoH request to {}", self.url);
         info!("DNS query packet length: {}", buf.len());
-        info!("DNS header: {:?}", &buf[..12]);
+        
+        // 检查URL是否为 /resolve 或 /resolver 端点
+        let path = self.url.path();
+        let is_json_api = path.ends_with("/resolve") || path.ends_with("/resolver");
+        
+        if is_json_api {
+            // 使用新模块解析DNS查询包
+            match crate::host_resolver::dns_packet_parser::parse_dns_query(&buf) {
+                Some(query_info) => {
+                    // 保存查询ID到结构体
+                    self.current_query_id = query_info.dns_id;
+                    
+                    // 构建GET请求，带上正确的参数
+                    let params = crate::host_resolver::dns_packet_parser::dns_query_to_doh_params(&query_info);
+                    let uri = format!("{}?{}", self.url, params);
+                    
+                    println!("发送JSON API DoH请求: {}, 查询ID: {}", uri, self.current_query_id);
+                    
+                    let req = Request::builder()
+                        .method(Method::GET)
+                        .uri(uri)
+                        .header(ACCEPT, "application/dns-json")
+                        // 不再使用extension
+                        .body(Body::empty())
+                        .unwrap();
+                    
+                    info!("JSON API请求头: {:?}", req.headers());
+                    let fut = self.client.request(req);
+                    self.tx_state = DohDatagramAdapterTxState::PendingResponse(fut);
+                }
+                None => {
+                    println!("无法解析DNS查询包以构建JSON API请求");
+                    // 如果无法解析，回退到标准DoH请求
+                    let req = Request::builder()
+                        .method(Method::POST)
+                        .uri(self.url.clone())
+                        .header(CONTENT_TYPE, "application/dns-message")
+                        .header(ACCEPT, "application/dns-message")
+                        .header("Content-Length", buf.len().to_string())
+                        .body(buf.into())
+                        .unwrap();
 
-        let req = Request::builder()
-            .method(Method::POST)
-            .uri(self.url.clone())
-            .header(CONTENT_TYPE, "application/dns-message")
-            .header(ACCEPT, "application/dns-message")
-            .header("Content-Length", buf.len().to_string())
-            .body(buf.into())
-            .unwrap();
+                    info!("标准DoH请求头: {:?}", req.headers());
+                    let fut = self.client.request(req);
+                    self.tx_state = DohDatagramAdapterTxState::PendingResponse(fut);
+                }
+            }
+        } else {
+            // 提取查询ID，用于标准DoH请求
+            if let Some(query_info) = crate::host_resolver::dns_packet_parser::parse_dns_query(&buf) {
+                self.current_query_id = query_info.dns_id;
+            }
+            
+            // 原始的二进制DoH请求方法，不变
+            let req = Request::builder()
+                .method(Method::POST)
+                .uri(self.url.clone())
+                .header(CONTENT_TYPE, "application/dns-message")
+                .header(ACCEPT, "application/dns-message")
+                .header("Content-Length", buf.len().to_string())
+                .body(buf.into())
+                .unwrap();
 
-        info!("Full request headers: {:?}", req.headers());
-
-        let fut = self.client.request(req);
-        self.tx_state = DohDatagramAdapterTxState::PendingResponse(fut);
+            info!("Full request headers: {:?}", req.headers());
+            let fut = self.client.request(req);
+            self.tx_state = DohDatagramAdapterTxState::PendingResponse(fut);
+        }
     }
 
     fn poll_shutdown(&mut self, _cx: &mut Context<'_>) -> Poll<FlowResult<()>> {
