@@ -1,0 +1,63 @@
+[package]
+name = "proxy"
+version = "0.1.0"
+edition = "2021"
+default-run = "proxy"
+
+[lib]
+name = "proxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "proxy-server"
+path = "src/bin/proxy-server.rs"
+
+[dependencies]
+futures = "0.3"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+smallvec = "1.6"
+async-trait = "0.1.77"
+thiserror = "1.0"
+flume = "0.10"
+trust-dns-resolver = "0.22.0"
+socket2 = "0.5.3"
+itertools = "0.11.0"
+subtle = "2.4.1"
+md-5 = "0.10.5"
+log = "0.4"
+env_logger = "0.10"
+toml = "0.8"
+cipher = { version = "0.4", optional = false }
+
+sha1 = { version = "0.10", optional = false }
+sha2 = { version = "0.10", optional = false }
+aes-gcm = { version = "0.10", optional = false }
+chacha20poly1305 = { version = "0.10", optional = false }
+rc4 = { version = "0.1", optional = false }
+chacha20 = { version = "0.9", optional = false }
+camellia = { version = "0.1", optional = false }
+ctr = { version = "0.9", optional = false }
+cfb-mode = { version = "0.8", optional = false }
+hkdf = { version = "0.12", optional = false }
+hmac = { version = "0.12", optional = false }
+const-fnv1a-hash = { version = "1", optional = false }
+sha3 = { version = "0.10", optional = false }
+crc32fast = { version = "1", optional = false}
+getrandom = "^0.2"
+base64 = "0.21" 
+pin-project-lite = "0.2"
+httparse = { version = "1", optional = false }
+url = "2.2"
+warp = "0.3"
+http = "0.2"
+hyper = { version = "0.14", features = ["full"] }
+tokio-util = "0.7"
+hyper-rustls = { version = "0.25", features = ["http2"] }
+rustls = "0.23"
+rustls-native-certs = "0.7"
+lazy_static = "1.4"
+aho-corasick = "0.7"
+maxminddb = "0.23"
+cidr = "0.2"
+regex = "1.0"

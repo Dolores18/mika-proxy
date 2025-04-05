@@ -1,0 +1,52 @@
+# 代理服务器配置
+[servers]
+# 可以添加多个服务器地址
+addresses = [
+    "107.174.218.153:1080", 
+    "2401:b60:16:db:::1080"
+]
+
+# DNS 解析配置
+[dns]
+# 国内 DoH 服务器
+china_doh = "https://1.12.12.12/dns-query"
+# 国际 DoH 服务器
+global_doh = "https://1.1.1.1/dns-query"
+# 通用DoH服务器
+doh = "https://1.1.1.1/dns-query"
+
+# 功能配置
+[features]
+# Shadowsocks 密钥（base64 编码）
+ss_key = "JtivfX27TuAkUkfgFXGuEQ=="
+
+# 客户端配置
+[client]
+# TCP监听地址
+listen_addr_v4 = "127.0.0.1:1081"
+listen_addr_v6 = "[::]:1081"
+# UDP监听地址
+udp_listen_addr_v4 = "127.0.0.1:1083"
+udp_listen_addr_v6 = "[::]:1083"
+# GeoIP数据库路径
+geoip_db_path = "GeoLite2-Country.mmdb"
+
+# 直连域名列表
+[domains]
+direct = [
+    "baidu.com",
+    "qq.com",
+    "bilibili.com",
+    "bdimg.com",
+    "bdstatic.com",
+    "hdslb.com",
+    "baidubce.com",
+    "bcebos.com",
+    "bilivideo.com",
+    "biliapi.net",
+    "bili",
+    "zhihu.com",
+    "zhimg.com",
+    "bilivideo.cn",
+    "biliapi.net"
+] 

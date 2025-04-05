@@ -1,0 +1,31 @@
+/target
+/Cargo.lock
+
+# 忽略二进制文件
+/proxy
+/proxy-server
+/dispatcher-server
+/udp-server
+/dns-test
+*.exe
+*.pdb
+*.so
+*.dylib
+*.dll
+
+# 编辑器和 IDE 文件
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 日志文件
+*.log
+
+# 调试文件
+Breakpoints_v2.xcbkptlist
+
+# Rust 特有文件
+**/*.rs.bk
