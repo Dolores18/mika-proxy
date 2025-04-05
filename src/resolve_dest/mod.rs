@@ -12,6 +12,8 @@ async fn try_resolve_forward(
     domain: String,
     port: u16,
 ) -> DestinationAddr {
+    println!("🔍 尝试解析域名: {}, IPv6模式: {}", domain, is_ipv6);
+    
     match if is_ipv6 {
         resolver
             .resolve_ipv6(domain.clone())
@@ -27,14 +29,20 @@ async fn try_resolve_forward(
             .and_then(|ips| ips.first().cloned())
             .map(Into::into)
     } {
-        Some(ip) => DestinationAddr {
-            host: HostName::Ip(ip),
-            port,
+        Some(ip) => {
+            println!("✅ 域名解析成功: {} -> {}", domain, ip);
+            DestinationAddr {
+                host: HostName::Ip(ip),
+                port,
+            }
         },
 
-        None => DestinationAddr {
-            host: HostName::DomainName(domain),
-            port,
+        None => {
+            println!("❌ 域名解析失败: {}", domain);
+            DestinationAddr {
+                host: HostName::DomainName(domain),
+                port,
+            }
         },
     }
 }

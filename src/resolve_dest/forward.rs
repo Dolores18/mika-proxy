@@ -23,14 +23,21 @@ fn handle_context(
     on_context: impl FnOnce(Box<FlowContext>) + Send + 'static,
 ) {
     let domain = match &mut context.remote_peer.host {
-        HostName::DomainName(domain) => std::mem::take(domain),
-        _ => return on_context(context),
+        HostName::DomainName(domain) => {
+            println!("📝 提取域名进行解析: {}", domain);
+            std::mem::take(domain)
+        },
+        _ => {
+            println!("🏭 目标已经是IP，跳过解析: {:?}", context.remote_peer.host);
+            return on_context(context);
+        }
     };
     let resolver = match resolver.upgrade() {
         Some(resolver) => resolver,
         None => return,
     };
     tokio::spawn(async move {
+        let original_dest = context.remote_peer.clone();
         context.remote_peer = super::try_resolve_forward(
             context.local_peer.is_ipv6(),
             resolver,
@@ -38,6 +45,11 @@ fn handle_context(
             context.remote_peer.port,
         )
         .await;
+        
+        if let (HostName::DomainName(domain), HostName::Ip(ip)) = (&original_dest.host, &context.remote_peer.host) {
+            println!("🔄 域名替换完成: {} -> {}", domain, ip);
+        }
+        
         on_context(context);
         FlowResult::Ok(())
     });

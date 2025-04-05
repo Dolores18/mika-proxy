@@ -58,7 +58,8 @@ mod rule_dispatcher;
 use cidr::IpCidr;
 use maxminddb::Reader;
 use rule_dispatcher::{Action, ActionHandle, RuleDispatcher, RuleDispatcherBuilder, RuleSet};
-
+mod resolve_dest;
+use resolve_dest::*;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerStatus {
     pub server_address: String,
@@ -454,6 +455,13 @@ pub async fn start_dispatcher_server(
     info!("启动分发代理服务器");
     info!("地址列表: {:?}", server_addrs);
     info!("服务器配置: {:?}", server_config);
+    // 修改代理地址创建方式
+    let server_config_clone = Arc::new(server_config.clone());
+    let proxy_addr = server_config_clone.create_fixed_adrr();
+    // 创建 Shadowsocks 工厂，使用配置中的密钥
+    let psd = &app_config.features.ss_key;
+    let key = BASE64.decode(psd).expect("Failed to decode");
+    let key: [u8; 16] = key.try_into().expect("Invalid key length"); 
 
     // 创建统计对象
     let stat = forward::StatHandle::default();
@@ -462,15 +470,26 @@ pub async fn start_dispatcher_server(
     let direct_resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
 
     // 2. 创建 DoH 客户端和代理组件
-    let proxy_outbound_factory = Arc::new(SocketOutboundFactory {
+    let doh_tcp_factory = Arc::new(SocketOutboundFactory {
         resolver: Arc::downgrade(&direct_resolver),
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
+    // 
+    //创建doh重定向工厂
+    let doh_redirect_factory = Arc::new(StreamRedirectOutboundFactory {
+        remote_peer: proxy_addr.clone(),
+        next: Arc::downgrade(&doh_tcp_factory) as Weak<dyn StreamOutboundFactory>,
+    });
+    //创建doh ss加密工厂
+    let doh_ss_factory = Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
+    key,
+    Arc::downgrade(&doh_redirect_factory) as Weak<dyn StreamOutboundFactory>,
+    ));
 
     let doh_factories = vec![DohDatagramAdapterFactory::new(
         app_config.dns.doh.parse().unwrap(), // 使用配置中的国际 DoH 服务器
-        Arc::downgrade(&proxy_outbound_factory) as Weak<dyn StreamOutboundFactory>,
+        Arc::downgrade(&doh_ss_factory) as Weak<dyn StreamOutboundFactory>,
     )];
     println!("Created DoH client for URL: {}", app_config.dns.doh);
 
@@ -483,7 +502,7 @@ pub async fn start_dispatcher_server(
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
-
+ 
     // 4. 创建直连转发处理器
     let direct_forward_handler = Arc::new(forward::StreamForwardHandler {
         outbound: Arc::downgrade(&direct_outbound_factory) as Weak<dyn StreamOutboundFactory>,
@@ -491,15 +510,13 @@ pub async fn start_dispatcher_server(
         stat: stat.clone(),
     });
 
+
     // 5. 创建代理处理器链
-    // 修改代理地址创建方式
-    let server_config_clone = Arc::new(server_config.clone());
-    let proxy_addr = server_config_clone.create_fixed_adrr();
 
 
     let redirect_factory = Arc::new(StreamRedirectOutboundFactory {
         remote_peer: proxy_addr,
-        next: Arc::downgrade(&proxy_outbound_factory) as Weak<dyn StreamOutboundFactory>,
+        next: Arc::downgrade(&direct_outbound_factory) as Weak<dyn StreamOutboundFactory>,
     });
 
     // 使用配置中的SS密钥
@@ -517,6 +534,7 @@ pub async fn start_dispatcher_server(
         request_timeout: 10000,
         stat: stat.clone(),
     });
+
 
     // 6. 创建规则分发器
     let rule_dispatcher = Arc::new_cyclic(|me| {
@@ -602,11 +620,18 @@ pub async fn start_dispatcher_server(
         }
     });
 
+    //创建doh响应结果映射回去
+    let stream_forward_resolver = Arc::new(StreamForwardResolver {
+        resolver: Arc::downgrade(&proxy_resolver),
+        next: Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>,
+    });
+    
     // 7. 创建 SOCKS5 处理器并启动服务器
     let socks5_handler = Arc::new(Socks5Handler::new(
         None,
-        Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>,
+        Arc::downgrade(&stream_forward_resolver) as Weak<dyn StreamHandler>,
     ));
+    
 
     let listen_addr_v4 = app_config.client.listen_addr_v4.clone();
     let listen_addr_v6 = app_config.client.listen_addr_v6.clone();
