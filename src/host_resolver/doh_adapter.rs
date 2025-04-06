@@ -1,6 +1,7 @@
 use std::pin::Pin;
 use std::sync::Weak;
 use std::task::{ready, Context, Poll};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -18,6 +19,7 @@ use tokio_util::sync::PollSender;
 use crate::host_resolver::dns_packet_parser;
 use crate::flow::*;
 use crate::h2::{FlowAdapterConnector, TokioHyperExecutor};
+use rustls;
 
 pub struct DohDatagramAdapterFactory {
     client: HyperClient<HttpsConnector<FlowAdapterConnector>, Body>,
@@ -38,6 +40,7 @@ struct DohDatagramAdapter {
     tx_state: DohDatagramAdapterTxState,
     rx_chan: (Option<PollSender<Buffer>>, mpsc::Receiver<Buffer>),
     current_query_id: u16,
+    request_start_time: Option<Instant>,
 }
 
 impl DohDatagramAdapterFactory {
@@ -45,14 +48,17 @@ impl DohDatagramAdapterFactory {
         // 创建自定义连接器
         let flow_connector = FlowAdapterConnector { next };
 
-        // 使用 hyper_rustls 的构建器 API
+        let is_https = url.scheme() == Some(&http::uri::Scheme::HTTPS);
+        println!("Creating DoH client for URL: {} (is_https: {})", url, is_https);
+
+        // 使用统一的HTTPS连接器，同时支持HTTP和HTTPS
         let https = hyper_rustls::HttpsConnectorBuilder::new()
             .with_native_roots()
             .expect("failed to load native root certificates")
-            .https_only()
+            .https_or_http() // 允许HTTP连接
             .enable_http2()
             .wrap_connector(flow_connector);
-
+        
         // 创建支持 HTTP2 的 hyper client
         let client = hyper::Client::builder()
             .http2_only(false) // 允许回退到 HTTP/1.1
@@ -65,8 +71,6 @@ impl DohDatagramAdapterFactory {
             .pool_max_idle_per_host(1)
             .executor(TokioHyperExecutor::new_current())
             .build::<_, Body>(https);
-
-        //println!("Created DoH client for URL: {}", url);
 
         Self { client, url }
     }
@@ -82,6 +86,7 @@ impl DatagramSessionFactory for DohDatagramAdapterFactory {
             rx_chan: (Some(PollSender::new(rx_tx)), rx_rx),
             url: self.url.clone(),
             current_query_id: 0,
+            request_start_time: None,
         }))
     }
 }
@@ -109,6 +114,12 @@ impl DatagramSession for DohDatagramAdapter {
                 DohDatagramAdapterTxState::Idle => break Poll::Ready(()),
                 DohDatagramAdapterTxState::PendingResponse(mut fut) => match fut.poll_unpin(cx) {
                     Poll::Ready(Ok(resp)) => {
+                        // 计算并打印DoH请求响应时间
+                        if let Some(start_time) = self.request_start_time {
+                            let duration = start_time.elapsed();
+                            println!("DoH响应时间: {}ms", duration.as_millis());
+                        }
+                        
                         println!("Received DoH response with status: {}", resp.status());
                         
                         // 使用成员变量中的查询ID
@@ -143,6 +154,12 @@ impl DatagramSession for DohDatagramAdapter {
                     let current_buf_len = byte_bufs.iter().map(|c| c.len()).sum();
                     match Pin::new(&mut body).poll_data(cx) {
                         Poll::Ready(None) => {
+                            // 计算并打印完整DoH请求-响应周期时间
+                            if let Some(start_time) = self.request_start_time.take() {
+                                let duration = start_time.elapsed();
+                                println!("完整DoH请求-响应周期: {}ms", duration.as_millis());
+                            }
+                            
                             let mut buf = Vec::with_capacity(current_buf_len);
                             for b in byte_bufs {
                                 buf.extend_from_slice(&b[..]);
@@ -160,14 +177,14 @@ impl DatagramSession for DohDatagramAdapter {
                                 // 打印JSON响应内容
                                 match std::str::from_utf8(&buf) {
                                     Ok(json_str) => {
-                                        println!("JSON API Response: {}", json_str);
+                                        //println!("JSON API Response: {}", json_str);
                                         
                                         // 将JSON解析为DNS响应，使用传递的查询ID
                                         if let Some(dns_packet) = crate::host_resolver::dns_packet_parser::json_to_dns_message(json_str, query_id) {
-                                            println!("成功将JSON转换为DNS二进制包，长度: {}, 查询ID: {}", dns_packet.len(), query_id);
+                                            //println!("成功将JSON转换为DNS二进制包，长度: {}, 查询ID: {}", dns_packet.len(), query_id);
                                             buf = dns_packet;
                                         } else {
-                                            println!("错误：无法将JSON转换为DNS包");
+                                            //println!("错误：无法将JSON转换为DNS包");
                                         }
                                     },
                                     Err(_) => println!("JSON API Response: 无法解析为UTF-8字符串")
@@ -212,6 +229,9 @@ impl DatagramSession for DohDatagramAdapter {
     }
 
     fn send_to(&mut self, _remote_peer: DestinationAddr, buf: Buffer) {
+        // 记录请求开始时间
+        self.request_start_time = Some(Instant::now());
+        
         info!("Sending DoH request to {}", self.url);
         info!("DNS query packet length: {}", buf.len());
         

@@ -158,7 +158,7 @@ fn load_direct_domains(app_config: &config::AppConfig) -> HashSet<String> {
             .collect();
         
         println!("成功加载直连域名列表，共 {} 个域名", domains.len());
-        info!("直连域名列表: {:?}", domains);
+        println!("直连域名列表: {:?}", domains);
         return domains;
     }
     
@@ -620,19 +620,18 @@ pub async fn start_dispatcher_server(
         }
     });
 
+
     //创建doh响应结果映射回去
     let stream_forward_resolver = Arc::new(StreamForwardResolver {
         resolver: Arc::downgrade(&proxy_resolver),
         next: Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>,
-    });
+        });
     
     // 7. 创建 SOCKS5 处理器并启动服务器
     let socks5_handler = Arc::new(Socks5Handler::new(
         None,
         Arc::downgrade(&stream_forward_resolver) as Weak<dyn StreamHandler>,
     ));
-    
-
     let listen_addr_v4 = app_config.client.listen_addr_v4.clone();
     let listen_addr_v6 = app_config.client.listen_addr_v6.clone();
 

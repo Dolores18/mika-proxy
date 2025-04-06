@@ -1,0 +1,13 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# Your rule content
+
+- You can @ files here
+- You can use markdown but dont have to
+# 在收到用户修改文件的指令的时候，你必须时刻记住修改的代码会影响到别的地方的那些文件的那些代码，
+# 还有就是时刻牢记，就是在新建文件新建项目单个文件代码最好不要超过一千行， 所以在实现一个功能的时候，你必须先思考可不可以按照最常用的架构
+进行拆分，比如可以放在同一个文件夹，或者就是按照最流行的拆分方式。

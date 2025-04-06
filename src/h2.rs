@@ -99,17 +99,24 @@ impl TowerService<Uri> for FlowAdapterConnector {
                 SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), 0),
                 remote_peer,
             );
-            ctx.application_layer_protocol = smallvec::smallvec!["h2"];
-
-            println!("FlowAdapterConnector: 开始创建 TCP 连接, 只使用 HTTP/2");
+            
+            // 根据协议选择应用层协议
+            let is_https = dst.scheme() == Some(&Scheme::HTTPS);
+            if is_https {
+                ctx.application_layer_protocol = smallvec::smallvec!["h2"];
+                println!("FlowAdapterConnector: 开始创建 TCP 连接, 使用 HTTP/2");
+            } else {
+                ctx.application_layer_protocol = smallvec::smallvec!["http/1.1"];
+                println!("FlowAdapterConnector: 开始创建 TCP 连接, 使用 HTTP/1.1");
+            }
 
             let (stream, inital_data) = next
                 .create_outbound(&mut ctx, &[])
                 .await
                 .map_err(|e| e.to_string())?;
 
-            // 由于只设置了 h2，这里应该总是 true
-            let use_h2 = true;
+            // 确定是否使用HTTP/2
+            let use_h2 = is_https;
             println!(
                 "FlowAdapterConnector: TCP 连接创建成功, 使用 H2: {}",
                 use_h2
