@@ -489,7 +489,7 @@ pub async fn start_dispatcher_server(
 
     let doh_factories = vec![DohDatagramAdapterFactory::new(
         app_config.dns.doh.parse().unwrap(), // 使用配置中的国际 DoH 服务器
-        Arc::downgrade(&doh_ss_factory) as Weak<dyn StreamOutboundFactory>,
+        Arc::downgrade(&doh_tcp_factory) as Weak<dyn StreamOutboundFactory>,
     )];
     println!("Created DoH client for URL: {}", app_config.dns.doh);
 
