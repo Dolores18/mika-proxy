@@ -1,5 +1,6 @@
 pub mod doh_adapter;
 mod udp_adapter;
+pub mod caching_resolver;
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Weak};
@@ -20,6 +21,7 @@ use lazy_static::lazy_static;
 use udp_adapter::*;
 
 pub mod dns_packet_parser;
+pub use caching_resolver::CachingResolver;
 
 #[derive(Clone)]
 struct FlowRuntime {}

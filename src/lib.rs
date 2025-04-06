@@ -2,6 +2,7 @@
 #![feature(stmt_expr_attributes)]
 #![feature(array_chunks)]
 #![feature(result_flattening)]
+#![feature(let_chains)]
 use async_trait::async_trait;
 use http::Uri;
 use smallvec::SmallVec;
@@ -44,6 +45,10 @@ pub use socket::*;
 mod socks5_udp;
 use socks5_udp::Socks5UdpHandler;
 
+// 添加 dns_server 模块
+mod dns_server;
+use dns_server::{DnsServer, MapBackStreamHandler, cache_writer};
+
 // 添加 datagram 相关的导入
 use crate::flow::datagram::*;
 mod h2;
@@ -60,6 +65,8 @@ use maxminddb::Reader;
 use rule_dispatcher::{Action, ActionHandle, RuleDispatcher, RuleDispatcherBuilder, RuleSet};
 mod resolve_dest;
 use resolve_dest::*;
+mod data;
+use data::PluginCache;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerStatus {
     pub server_address: String,
@@ -306,68 +313,186 @@ pub async fn start_proxy_server(
 
     // 创建 DoH 工厂时使用配置中指定的 DoH 服务器
     let doh_factories = vec![DohDatagramAdapterFactory::new(
-        app_config.dns.doh.parse().unwrap(), // 使用配置中的中国 DoH 服务器
-        Arc::downgrade(&doh_ss_factory) as Weak<dyn StreamOutboundFactory>,
+        app_config.dns.doh.parse().unwrap(), // 使用配置中的国际 DoH 服务器
+        Arc::downgrade(&doh_tcp_factory) as Weak<dyn StreamOutboundFactory>,
     )];
     println!("Created DoH client for URL: {}", app_config.dns.doh);
 
-    // 创建 HostResolver
-    let resolver2: Arc<dyn Resolver> = Arc::new(HostResolver::new(vec![], doh_factories));
-    // 创建 socket_outbound_factory
-    let socket_outbound_factory2 = Arc::new(SocketOutboundFactory {
-        resolver: Arc::downgrade(&resolver2),
+    // 创建代理解析器
+    let proxy_resolver: Arc<dyn Resolver> = Arc::new(HostResolver::new(vec![], doh_factories));
+
+    // 创建统计对象
+    let stat = forward::StatHandle::default();
+
+    // 创建DNS服务器用于缓存
+    let dns_plugin_cache = data::PluginCache::new(data::PluginId(1), None);
+    let dns_server = Arc::new(DnsServer::new(
+        100, // 并发限制
+        Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
+        3600, // TTL秒数 (1小时)
+        dns_plugin_cache,
+    ));
+    
+    // 启动缓存定期写入任务
+    tokio::spawn(cache_writer(dns_server.clone()));
+    println!("✅ DNS服务器缓存系统已启动");
+    
+    // 创建缓存解析器，先查询缓存，未命中再使用DoH
+    let caching_resolver: Arc<dyn Resolver> = Arc::new(host_resolver::CachingResolver::new(
+        dns_server.clone(),
+        proxy_resolver.clone()
+    ));
+    println!("✅ DNS缓存解析器已创建");
+
+    // 3. 创建直连出站工厂
+    let direct_outbound_factory = Arc::new(SocketOutboundFactory {
+        resolver: Arc::downgrade(&caching_resolver),
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
-    log::debug!("Created system resolver and DoH resolver");
-
-    // 统计对象
-    let stat = forward::StatHandle::default();
-    
-  
-    // 创建重定向工厂
-    let redirect_factory = Arc::new(StreamRedirectOutboundFactory {
-        remote_peer: proxy_addr.clone(),
-        next: Arc::downgrade(&socket_outbound_factory2) as Weak<dyn StreamOutboundFactory>,
+ 
+    // 4. 创建直连转发处理器
+    let direct_forward_handler = Arc::new(forward::StreamForwardHandler {
+        outbound: Arc::downgrade(&direct_outbound_factory) as Weak<dyn StreamOutboundFactory>,
+        request_timeout: 10000,
+        stat: stat.clone(),
     });
 
 
+    // 5. 创建代理处理器链
+
+
+    let redirect_factory = Arc::new(StreamRedirectOutboundFactory {
+        remote_peer: proxy_addr,
+        next: Arc::downgrade(&direct_outbound_factory) as Weak<dyn StreamOutboundFactory>,
+    });
+
+    // 使用配置中的SS密钥
+    let psd = &app_config.features.ss_key;
+    let key = BASE64.decode(psd).expect("Failed to decode");
+    let key: [u8; 16] = key.try_into().expect("Invalid key length");
 
     let ss_factory = Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
         key,
         Arc::downgrade(&redirect_factory) as Weak<dyn StreamOutboundFactory>,
     ));
-    
-    // 创建智能分流工厂
-    let smart_factory = Arc::new(SmartOutboundFactory::new(
-        &socket_outbound_factory2,
-        &ss_factory,
-        &direct_domains,
-    ));
 
-    // 创建 StreamForwardHandler 实例，使用智能分流工厂
-    let stream_forward_handler = Arc::new(forward::StreamForwardHandler {
-        outbound: Arc::downgrade(&smart_factory) as Weak<dyn StreamOutboundFactory>,
+    let proxy_forward_handler = Arc::new(forward::StreamForwardHandler {
+        outbound: Arc::downgrade(&ss_factory) as Weak<dyn StreamOutboundFactory>,
         request_timeout: 10000,
-        stat: stat,
+        stat: stat.clone(),
     });
 
-    //创建socks5处理器
-    let socks5_handler = Arc::new(Socks5Handler::new(
-        None,
-        Arc::downgrade(&stream_forward_handler) as Weak<dyn StreamHandler>,
+
+    // 6. 创建规则分发器
+    let rule_dispatcher = Arc::new_cyclic(|me| {
+        let mut builder = RuleDispatcherBuilder::default();
+        builder.set_resolver(Some(Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>));
+
+        // 创建直连动作
+        let direct_action = Action {
+            tcp_next: Arc::downgrade(&direct_forward_handler) as Weak<dyn StreamHandler>,
+            resolver: Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>,
+        };
+        println!("✅ 创建直连动作成功");
+
+        let direct_handle = builder
+            .add_action(direct_action)
+            .expect("Failed to add direct action");
+
+        // 创建代理动作
+        let proxy_action = Action {
+            tcp_next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
+            resolver: Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>,
+        };
+        println!("✅ 创建代理动作成功");
+
+        let proxy_handle = builder
+            .add_action(proxy_action)
+            .expect("Failed to add proxy action");
+
+        // 创建 Google 相关域名规则集
+        let google_domains = vec![
+            // 子域名匹配（以 . 开头）
+            "google.com",
+            "google-analytics.com",
+            "googleapis.com",
+            "gstatic.com",
+            "doubleclick.net",
+            "www.google-analytics.com",
+            "www.googleapis.com",
+            "www.gstatic.com",
+            "www.doubleclick.net",
+            "beacons.gcp.gvt2.com",
+        ];
+
+        // 使用 build_surge_domainset 构建域名规则
+        if let Some(domain_rule_set) =
+            RuleSet::build_surge_domainset(google_domains.iter().map(|s| *s), proxy_handle)
+        {
+            println!("✅ 成功创建 Google 域名规则集");
+
+            // 直接使用构建好的规则集
+            let mut rule_set = domain_rule_set;
+
+            // 添加 GeoIP 规则
+            if let Some(geoip_db) = match std::fs::read(&app_config.client.geoip_db_path) {
+                Ok(data) => {
+                    println!("✅ 成功加载 GeoIP 数据库");
+                    let code_action_mapping = vec![
+                        ("CN".to_string(), direct_handle),
+                        ("US".to_string(), proxy_handle),
+                    ]
+                    .into_iter();
+
+                    RuleSet::build_dst_geoip_rule(code_action_mapping, Arc::from(data))
+                }
+                Err(e) => {
+                    println!("❌ 无法加载 GeoIP 数据库: {}", e);
+                    None
+                }
+            } {
+                rule_set.dst_geoip = geoip_db.dst_geoip;
+                rule_set.first_resolving_rule_id = Some(0);
+            }
+
+            // 创建分发器
+            let fallback_action = Action {
+                tcp_next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
+                resolver: Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>,
+            };
+
+            builder.build(rule_set, fallback_action, me.clone())
+        } else {
+            panic!("Failed to create domain rule set");
+        }
+    });
+
+    // 添加MapBackStreamHandler将IP地址映射回域名
+    let mapback_handler = Arc::new(MapBackStreamHandler::new(
+        &dns_server,
+        Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>
     ));
 
-    // 监听地址设置，使用配置文件中的值
+    //创建doh响应结果映射回去
+    let stream_forward_resolver = Arc::new(StreamForwardResolver {
+        resolver: Arc::downgrade(&caching_resolver),
+        next: Arc::downgrade(&mapback_handler) as Weak<dyn StreamHandler>,
+    });
+    
+    // 7. 创建 SOCKS5 处理器并启动服务器
+    let socks5_handler = Arc::new(Socks5Handler::new(
+        None,
+        Arc::downgrade(&stream_forward_resolver) as Weak<dyn StreamHandler>,
+    ));
     let listen_addr_v4 = app_config.client.listen_addr_v4.clone();
     let listen_addr_v6 = app_config.client.listen_addr_v6.clone();
 
     println!(
-        "Smart proxy server listening on {} (IPv4) and {} (IPv6)",
+        "Rule-based proxy server listening on {} (IPv4) and {} (IPv6)",
         listen_addr_v4, listen_addr_v6
     );
 
-    // 创建监听器
     let handle_v4 = listen_tcp(
         Arc::downgrade(&socks5_handler) as Weak<dyn StreamHandler>,
         listen_addr_v4,
@@ -378,11 +503,7 @@ pub async fn start_proxy_server(
         listen_addr_v6,
     )?;
 
-    log::info!("Proxy server initialization complete");
-
-    // 等待监听器完成
     tokio::try_join!(handle_v4, handle_v6)?;
-
     Ok(())
 }
 
@@ -496,9 +617,29 @@ pub async fn start_dispatcher_server(
     // 创建代理解析器
     let proxy_resolver: Arc<dyn Resolver> = Arc::new(HostResolver::new(vec![], doh_factories));
 
+    // 创建DNS服务器用于缓存
+    let dns_plugin_cache = data::PluginCache::new(data::PluginId(1), None);
+    let dns_server = Arc::new(DnsServer::new(
+        100, // 并发限制
+        Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
+        3600, // TTL秒数 (1小时)
+        dns_plugin_cache,
+    ));
+    
+    // 启动缓存定期写入任务
+    tokio::spawn(cache_writer(dns_server.clone()));
+    println!("✅ DNS服务器缓存系统已启动");
+    
+    // 创建缓存解析器，先查询缓存，未命中再使用DoH
+    let caching_resolver: Arc<dyn Resolver> = Arc::new(host_resolver::CachingResolver::new(
+        dns_server.clone(),
+        proxy_resolver.clone()
+    ));
+    println!("✅ DNS缓存解析器已创建");
+
     // 3. 创建直连出站工厂
     let direct_outbound_factory = Arc::new(SocketOutboundFactory {
-        resolver: Arc::downgrade(&proxy_resolver),
+        resolver: Arc::downgrade(&caching_resolver),
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
@@ -539,12 +680,12 @@ pub async fn start_dispatcher_server(
     // 6. 创建规则分发器
     let rule_dispatcher = Arc::new_cyclic(|me| {
         let mut builder = RuleDispatcherBuilder::default();
-        builder.set_resolver(Some(Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>));
+        builder.set_resolver(Some(Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>));
 
         // 创建直连动作
         let direct_action = Action {
             tcp_next: Arc::downgrade(&direct_forward_handler) as Weak<dyn StreamHandler>,
-            resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
+            resolver: Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>,
         };
         println!("✅ 创建直连动作成功");
 
@@ -555,7 +696,7 @@ pub async fn start_dispatcher_server(
         // 创建代理动作
         let proxy_action = Action {
             tcp_next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
-            resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
+            resolver: Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>,
         };
         println!("✅ 创建代理动作成功");
 
@@ -611,7 +752,7 @@ pub async fn start_dispatcher_server(
             // 创建分发器
             let fallback_action = Action {
                 tcp_next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
-                resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
+                resolver: Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>,
             };
 
             builder.build(rule_set, fallback_action, me.clone())
@@ -620,12 +761,17 @@ pub async fn start_dispatcher_server(
         }
     });
 
+    // 添加MapBackStreamHandler将IP地址映射回域名
+    let mapback_handler = Arc::new(MapBackStreamHandler::new(
+        &dns_server,
+        Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>
+    ));
 
     //创建doh响应结果映射回去
     let stream_forward_resolver = Arc::new(StreamForwardResolver {
-        resolver: Arc::downgrade(&proxy_resolver),
-        next: Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>,
-        });
+        resolver: Arc::downgrade(&caching_resolver),
+        next: Arc::downgrade(&mapback_handler) as Weak<dyn StreamHandler>,
+    });
     
     // 7. 创建 SOCKS5 处理器并启动服务器
     let socks5_handler = Arc::new(Socks5Handler::new(

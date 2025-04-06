@@ -4,6 +4,8 @@
 addresses = [
     "47.79.39.75:1080",
     "107.174.218.153:1080", 
+  
+    
     "2401:b60:16:db:::1080"
    
 ]
@@ -19,6 +21,7 @@ global_doh = "https://1.1.1.1/dns-query"
 doh = "http://127.0.0.1:5353/dns-query"
 # 备用DoH服务器
 adg = "http://94.140.14.14/resolve"
+pub = "https://doh.pub/dns-query"
 
 # 功能配置
 [features]
