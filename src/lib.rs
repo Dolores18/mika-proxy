@@ -67,6 +67,10 @@ mod resolve_dest;
 use resolve_dest::*;
 mod data;
 use data::PluginCache;
+mod fakeip;
+use fakeip::*;
+mod ip_stack;
+use ip_stack::*;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerStatus {
     pub server_address: String,
