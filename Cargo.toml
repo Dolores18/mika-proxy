@@ -67,5 +67,6 @@ rusqlite = { version = "0.34.0", features = ["bundled"] }
 refinery = "0.8.16"
 lru = { version = "0.12" }
 smoltcp = "0.11"
+tun = { version = "0.7", features = ["async", "tokio"] }
 [features]
 lru = []
