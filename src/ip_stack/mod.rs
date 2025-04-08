@@ -279,7 +279,7 @@ fn process_tcp(
     println!("  数据包长度: {} 字节", packet.len());
     
     // 打印数据包内容（十六进制）
-    println!("  数据包内容（十六进制）:");
+    println!("🍎数据包内容（十六进制）:");
     for (i, chunk) in packet.chunks(16).enumerate() {
         let mut hex_line = format!("    {:04x}: ", i * 16);
         let mut ascii_line = String::new();
@@ -312,21 +312,21 @@ fn process_tcp(
     dev.rx = Some(packet);
 
     let tcp_socket_count = tcp_sockets.len();
-    println!("  当前 TCP 连接数: {}", tcp_socket_count);
+    println!(" 🍎当前 TCP 连接数: {}", tcp_socket_count);
 
     if let Entry::Vacant(vac) = tcp_sockets.entry(src_addr) {
         if !is_syn || tcp_socket_count >= 1 << 10 {
-            println!("  ❌ 拒绝连接: 不是 SYN 包或连接数超限");
+            println!(" 🍎 拒绝连接: 不是 SYN 包或连接数超限");
             return;
         }
         let next = match tcp_next.upgrade() {
             Some(n) => n,
             None => {
-                println!("  ❌ 无法获取 TCP 处理器");
+                println!(" 🍎 无法获取 TCP 处理器");
                 return;
             }
         };
-        println!("  ✅ 创建新的 TCP 连接");
+        println!(" 🍎创建新的 TCP 连接");
         let mut socket = TcpSocket::new(
             RingBuffer::new(vec![0; 1024 * 14]),
             RingBuffer::new(vec![0; 10240]),
@@ -345,7 +345,7 @@ fn process_tcp(
                 port: dst_port,
             },
         );
-        println!("  ✅ 启动 TCP 流处理任务");
+        println!(" 🍎启动 TCP 流处理任务");
         tokio::spawn({
             let stack = stack.clone();
             async move {
@@ -360,19 +360,19 @@ fn process_tcp(
                     tx_buf: Some((Vec::with_capacity(4 * 1024), 0)),
                 };
                 if stream.handshake().await.is_ok() {
-                    println!("  ✅ TCP 握手成功");
+                    println!(" 🍎 TCP 握手成功");
                     next.on_stream(Box::new(stream) as _, Buffer::new(), Box::new(ctx));
                 } else {
-                    println!("  ❌ TCP 握手失败");
+                    println!(" 🍎 TCP 握手失败");
                 }
             }
         });
     } else {
-        println!("  ℹ️ 已存在的 TCP 连接");
+        println!(" 🍎已存在的 TCP 连接");
     };
     let now = Instant::now();
     let _ = netif.poll(now.into(), dev, socket_set);
-    println!("  ✅ 完成网络接口轮询");
+    println!(" 🍎 完成网络接口轮询");
 }
 
 fn process_udp(

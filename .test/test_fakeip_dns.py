@@ -210,29 +210,60 @@ def simulate_browser(domain, dns_server='127.0.0.1', dns_port=6353):
         print("  本地地址:", sock.getsockname())
         print("  远程地址:", sock.getpeername())
         
+        # 设置更长的超时时间
+        sock.settimeout(180)  # 3分钟超时
+        
         # 3. 发送HTTP请求
         http_request = f"GET / HTTP/1.1\r\nHost: {domain}\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n"
-        sock.send(http_request.encode())
-        print("✅ HTTP请求已发送")
+        print(f"发送HTTP请求:\n{http_request}")
+        bytes_sent = sock.send(http_request.encode())
+        print(f"✅ HTTP请求已发送，发送了 {bytes_sent} 字节")
         
         # 4. 接收响应
         response = b""
-        while True:
-            data = sock.recv(4096)
-            if not data:
-                break
-            response += data
+        try:
+            print("等待服务器响应...")
+            while True:
+                data = sock.recv(4096)
+                if not data:
+                    print("✅ 服务器关闭了连接")
+                    break
+                print(f"收到数据包，长度: {len(data)}")
+                print(f"数据包内容(十六进制): {data.hex()}")
+                response += data
+                
+            # 打印响应头
+            headers = response.split(b"\r\n\r\n")[0]
+            print("\nHTTP响应头:")
+            print(headers.decode())
             
-        # 打印响应头
-        headers = response.split(b"\r\n\r\n")[0]
-        print("\nHTTP响应头:")
-        print(headers.decode())
-        
+            # 打印响应体
+            body = response.split(b"\r\n\r\n")[1] if len(response.split(b"\r\n\r\n")) > 1 else b""
+            print("\nHTTP响应体:")
+            print(body.decode())
+            
+        except socket.timeout:
+            print("❌ 接收响应超时")
+            if response:
+                print("\n已接收的部分响应:")
+                print(response.decode())
+                print(f"响应长度: {len(response)} 字节")
+        except Exception as e:
+            print(f"❌ 接收响应时出错: {e}")
+            if response:
+                print("\n已接收的部分响应:")
+                print(response.decode())
+                print(f"响应长度: {len(response)} 字节")
+            
     except socket.timeout:
         print("❌ 连接超时")
     except Exception as e:
         print(f"❌ 发生错误: {e}")
     finally:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except:
+            pass
         sock.close()
         print("✅ 连接已关闭")
 

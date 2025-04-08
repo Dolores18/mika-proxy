@@ -347,16 +347,16 @@ impl Tun for MacTun {
                         // 简化的IPv6地址打印
                         println!("📦 接收IP包: IPv6, 下一头部: {}", next_header);
                         
-                        println!("TUN设备接收: IP版本: {}, 协议: {}, 长度: {}", 
+                        println!("🐶MACTUN: IP版本: {}, 协议: {}, 长度: {}", 
                                 version, next_header, buffer.len());
                     } else {
-                        println!("TUN设备接收: IP版本: {}, 长度: {}", version, buffer.len());
+                        println!("🐶MACTUN: IP版本: {}, 长度: {}", version, buffer.len());
                     }
                 } else {
-                    println!("TUN设备接收: 数据包太小，无法解析IP头");
+                    println!("🐶MACTUN: 数据包太小，无法解析IP头");
                 }
                 
-                println!("TUN: 收到数据包，长度: {}", buffer.len());
+                println!("🐶MACTUN: 收到数据包，长度: {}", buffer.len());
                 Some(buffer)
             },
             Err(e) => {
@@ -369,7 +369,7 @@ impl Tun for MacTun {
     
     fn return_recv_buffer(&self, buf: Buffer) {
         // 将缓冲区放回池中以便重用
-        println!("TUN: 返还接收缓冲区，长度: {}", buf.len());
+        println!("🐶MACTUN: 返还接收缓冲区，长度: {}", buf.len());
         self.buffer_pool.lock().unwrap().push_back(buf);
     }
     
@@ -386,7 +386,7 @@ impl Tun for MacTun {
         // 构造签名
         let signature = [data_ptr as *mut usize, std::ptr::null_mut()];
         
-        println!("TUN: 创建发送缓冲区，大小: {}", self.mtu);
+        println!("🐶MACTUN: 创建发送缓冲区，大小: {}", self.mtu);
         
         // 安全性：我们确保签名可以安全地发送到其他线程
         unsafe {
@@ -395,7 +395,7 @@ impl Tun for MacTun {
     }
     
     fn send(&self, buf: TunBufferToken, len: usize) {
-        println!("TUN: 发送数据包，长度: {}", len);
+        println!("🐶MACTUN: 发送数据包，长度: {}", len);
         
         let (signature, data) = buf.into_parts();
         
@@ -443,14 +443,14 @@ impl Tun for MacTun {
             }
         }
         
-        // 使用tokio运行时发送数据副本
+        // 使用tokio::spawn来异步处理写入操作
         let device = self.device.clone();
         tokio::spawn(async move {
             let mut device_guard = device.lock().await;
             if let Err(e) = device_guard.write(&data_to_send).await {
                 eprintln!("写入TUN设备错误: {}", e);
             } else {
-                println!("TUN: 成功写入TUN设备 {} 字节", data_to_send.len());
+                println!("TUN: 成功写入MacTun设备 {} 字节, 数据包内容(十六进制): {:02x?}", data_to_send.len(), data_to_send);
             }
         });
     }
