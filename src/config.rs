@@ -73,8 +73,8 @@ impl Default for AppConfig {
             },
             dns: DnsConfig {
                 china_doh: "https://1.12.12.12/dns-query".to_string(),
-                global_doh: "https://1.1.1.1/dns-query".to_string(),
-                doh: "https://1.1.1.1/dns-query".to_string(),
+                global_doh: "https://8.8.8.8/dns-query".to_string(),
+                doh: "https://8.8.8.8/dns-query".to_string(),
             },
             features: FeaturesConfig {
                 ss_key: "JtivfX27TuAkUkfgFXGuEQ==".to_string(),

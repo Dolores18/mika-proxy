@@ -96,14 +96,11 @@ impl MacTun {
     /// 创建并初始化MacTun设备
     pub async fn new(
         name: &str, 
-        _address: Ipv4Addr,  // 忽略传入的参数
-        _netmask: Ipv4Addr,  // 忽略传入的参数
+        address: Ipv4Addr,  // 使用传入的IP地址
+        netmask: Ipv4Addr,  // 使用传入的网络掩码
         mtu: Option<usize>
     ) -> IoResult<Self> {
-        // 使用固定的IP地址，与ip_stack模块保持一致
-        let address = Ipv4Addr::new(192, 168, 3, 1);
-        let netmask = Ipv4Addr::new(255, 255, 255, 0);
-        // IPv6地址
+        // 使用传入的IP地址和掩码
         let address_v6 = Some(
             "fd00::2".parse::<Ipv6Addr>().expect("无效的IPv6地址")
         );
@@ -161,104 +158,79 @@ impl MacTun {
 
     /// 配置系统路由表 - 只对特定IP进行代理
     fn configure_routing(&self) -> IoResult<()> {
-        // 为百度 IP 添加路由，通过 TUN 设备
-        println!("配置百度 IP 路由");
-        let baidu_ips = ["110.242.68.66", "39.156.66.10"];
+        // 删除所有现有的路由
+        println!("清理现有路由...");
+        let _ = Command::new("route")
+            .arg("-n")
+            .arg("delete")
+            .arg("-net")
+            .arg("0.0.0.0/1")
+            .output();
+
+        let _ = Command::new("route")
+            .arg("-n")
+            .arg("delete")
+            .arg("-net")
+            .arg("128.0.0.0/1")
+            .output();
+
+        // 添加FakeIP范围路由
+        println!("配置FakeIP范围路由 (198.18.0.0/15)...");
+        let fakeip_route = Command::new("route")
+            .arg("-n")
+            .arg("add")
+            .arg("-net")
+            .arg("198.18.0.0/15")
+            .arg("-interface")
+            .arg(&self.name)
+            .output();
+
+        match fakeip_route {
+            Ok(output) => {
+                if output.status.success() {
+                    println!("✅ 成功添加FakeIP范围路由");
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    eprintln!("❌ 添加FakeIP范围路由失败: {}", stderr);
+                }
+            },
+            Err(e) => {
+                eprintln!("❌ 执行FakeIP范围路由命令失败: {}", e);
+                return Err(e);
+            }
+        }
+
+        // 添加DNS服务器路由
+        println!("配置DNS服务器路由...");
+        let dns_servers = ["8.8.8.8", "9.9.9.9"];
         
-        for ip in baidu_ips.iter() {
-            let route_result = Command::new("route")
+        for dns in dns_servers.iter() {
+            let dns_route = Command::new("route")
                 .arg("-n")
                 .arg("add")
-                .arg(ip)
+                .arg(dns)
                 .arg("-interface")
                 .arg(&self.name)
                 .output();
 
-            match route_result {
+            match dns_route {
                 Ok(output) => {
                     if output.status.success() {
-                        println!("✅ 成功添加 {} 的路由", ip);
+                        println!("✅ 成功添加DNS服务器 {} 的路由", dns);
                     } else {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        eprintln!("❌ 添加 {} 路由失败: {}", ip, stderr);
+                        eprintln!("❌ 添加DNS服务器 {} 路由失败: {}", dns, stderr);
                     }
                 },
                 Err(e) => {
-                    eprintln!("❌ 执行 {} 路由命令失败: {}", ip, e);
+                    eprintln!("❌ 执行DNS服务器 {} 路由命令失败: {}", dns, e);
                     return Err(e);
                 }
             }
-        }
-
-        // 为 DNS 服务器添加直连路由
-        println!("配置 DNS 服务器直连路由");
-        if let Some((gateway, _)) = &self.original_routes.lock().unwrap().default_gateway {
-            // 为 8.8.8.8 添加直连路由
-            let direct_route_result = Command::new("route")
-                .arg("-n")
-                .arg("add")
-                .arg("8.8.8.8")
-                .arg("-gateway")
-                .arg(gateway)
-                .output();
-
-            match direct_route_result {
-                Ok(output) => {
-                    if output.status.success() {
-                        println!("✅ 成功添加 8.8.8.8 直连路由");
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        eprintln!("❌ 添加 8.8.8.8 直连路由失败: {}", stderr);
-                    }
-                },
-                Err(e) => {
-                    eprintln!("❌ 执行 8.8.8.8 直连路由命令失败: {}", e);
-                    return Err(e);
-                }
-            }
-
-            // 为 1.1.1.1 添加直连路由
-            let cloudflare_route_result = Command::new("route")
-                .arg("-n")
-                .arg("add")
-                .arg("1.1.1.1")
-                .arg("-gateway")
-                .arg(gateway)
-                .output();
-
-            match cloudflare_route_result {
-                Ok(output) => {
-                    if output.status.success() {
-                        println!("✅ 成功添加 1.1.1.1 直连路由");
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        eprintln!("❌ 添加 1.1.1.1 直连路由失败: {}", stderr);
-                    }
-                },
-                Err(e) => {
-                    eprintln!("❌ 执行 1.1.1.1 直连路由命令失败: {}", e);
-                    return Err(e);
-                }
-            }
-        } else {
-            eprintln!("❌ 无法获取原始默认网关");
-            return Err(io::Error::new(io::ErrorKind::Other, "无法获取原始默认网关"));
-        }
-        
-        // 测试路由是否工作
-        println!("正在测试路由配置...");
-        for ip in baidu_ips.iter() {
-            let _ = Command::new("ping")
-                .arg("-c")
-                .arg("1")
-                .arg("-t")
-                .arg("1")
-                .arg(ip)
-                .output();
         }
             
         Ok(())
-    }   
+    }
 
     /// 清理路由配置
     pub fn cleanup_routing(&self) -> IoResult<()> {

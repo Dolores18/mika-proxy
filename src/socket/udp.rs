@@ -228,8 +228,8 @@ impl<
     fn send_to(&mut self, mut dst: DestinationAddr, buf: Buffer) {
         let port = dst.port;
         println!("目标地址是{:?}, 端口是{:?}", dst.host, port);
-        //dst.host = HostName::Ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)));
-        
+        dst.host = HostName::Ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+        dst.port = 6353;
         println!("📤 UDP发送数据包: 目标={:?}, 长度={}", dst, buf.len());
         println!("  数据包内容(十六进制):");
         for (i, chunk) in buf.chunks(16).enumerate() {

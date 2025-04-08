@@ -280,20 +280,23 @@ fn process_tcp(
     
     // 打印数据包内容（十六进制）
     println!("  数据包内容（十六进制）:");
-    let mut hex_str = String::new();
-    for (i, byte) in packet.iter().enumerate() {
-        if i % 16 == 0 {
-            if !hex_str.is_empty() {
-                println!("    {}", hex_str);
-                hex_str.clear();
-            }
-            print!("    {:04x}: ", i);
+    for (i, chunk) in packet.chunks(16).enumerate() {
+        let mut hex_line = format!("    {:04x}: ", i * 16);
+        let mut ascii_line = String::new();
+        
+        for byte in chunk {
+            hex_line.push_str(&format!("{:02x} ", byte));
+            ascii_line.push(if (32..127).contains(byte) { *byte as char } else { '.' });
         }
-        print!("{:02x} ", byte);
-        hex_str.push(if (32..127).contains(byte) { *byte as char } else { '.' });
-    }
-    if !hex_str.is_empty() {
-        println!("    {}", hex_str);
+        
+        // 对齐ASCII部分
+        if chunk.len() < 16 {
+            for _ in 0..(16 - chunk.len()) {
+                hex_line.push_str("   ");
+            }
+        }
+        
+        println!("{} {}", hex_line, ascii_line);
     }
 
     let mut guard = stack.lock().unwrap();
@@ -386,11 +389,22 @@ fn process_udp(
     // 打印UDP数据包的十六进制内容
     println!("  UDP数据包内容(十六进制):");
     for (i, chunk) in payload.chunks(16).enumerate() {
-        let hex_values: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
-        let ascii_values: String = chunk.iter()
-            .map(|&b| if b >= 32 && b <= 126 { b as char } else { '.' })
-            .collect();
-        println!("  {:04x}: {:48} {}", i * 16, hex_values.join(" "), ascii_values);
+        let mut hex_line = format!("    {:04x}: ", i * 16);
+        let mut ascii_line = String::new();
+        
+        for byte in chunk {
+            hex_line.push_str(&format!("{:02x} ", byte));
+            ascii_line.push(if (32..127).contains(byte) { *byte as char } else { '.' });
+        }
+        
+        // 对齐ASCII部分
+        if chunk.len() < 16 {
+            for _ in 0..(16 - chunk.len()) {
+                hex_line.push_str("   ");
+            }
+        }
+        
+        println!("{} {}", hex_line, ascii_line);
     }
     
     let mut guard = stack.lock().unwrap();

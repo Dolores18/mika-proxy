@@ -88,7 +88,7 @@ fn poll_forward_oneway(
                 match ready!(rx.poll_rx_buffer(cx)) {
                     Ok(buf) => {
                         let len = buf.len();
-                        info!("客户端接收到来自服务端的数据长度: {}", len);
+                        println!("tcp客户端接收到来自服务端的数据长度: {},数据是{:0X?}", len, buf);
                         tx.commit_tx_buffer(buf)?;
                         counter.fetch_add(len as u64, Ordering::Relaxed);
                         ForwardState::AwatingSizeHint

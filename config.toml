@@ -15,7 +15,7 @@ addresses = [
 # 国内 DoH 服务器
 china_doh = "https://1.12.12.12/dns-query"
 # 国际 DoH 服务器
-global_doh = "https://1.1.1.1/dns-query"
+global_doh = "https://8.8.8.8/dns-query"
 # 通用DoH服务器
 #doh = "https://rapid-paper-c846.aimerlp19.workers.dev/dns-query"
 doh = "http://127.0.0.1:5353/dns-query"
