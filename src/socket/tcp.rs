@@ -106,13 +106,13 @@ pub async fn dial_stream(
 ) -> FlowResult<(Box<dyn Stream>, Buffer)> {
     // 打印目标地址信息
     println!(
-        "正在连接到: {:?}:{}",
+        "🌹tcp客户端正在连接到: {:?}:{}",
         context.remote_peer.host, context.remote_peer.port
     );
 
     if !initial_data.is_empty() {
         info!(
-            "初始数据 (前50字节): {:?}",
+            "🌹tcp客户端初始数据 (前50字节): {:?}",
             &initial_data[..50.min(initial_data.len())]
         );
     }
@@ -120,15 +120,15 @@ pub async fn dial_stream(
     let port = context.remote_peer.port;
     let mut tcp_stream = match (context.remote_peer.host.clone(), bind_v4, bind_v6) {
         (HostName::Ip(IpAddr::V4(ip)), Some(bind_v4), _) => {
-            println!("使用 IPv4 连接: {}", ip);
+            println!("🌹tcp客户端使用 IPv4 连接: {}", ip);
             dial_socket_v4(ip, port, &bind_v4).await?
         }
         (HostName::Ip(IpAddr::V6(ip)), _, Some(bind_v6)) => {
-            println!("使用 IPv6 连接: {}", ip);
+            println!("🌹tcp客户端使用 IPv6 连接: {}", ip);
             dial_socket_v6(ip, port, &bind_v6).await?
         }
         (HostName::DomainName(domain), Some(bind_v4), None) => {
-            println!("🌐 使用系统解析器(IPv4): {}", domain);
+            println!("🌹tcp客户端使用系统解析器(IPv4): {}", domain);
             let ips = resolver.resolve_ipv4(domain).await?;
             let mut ret = Err(FlowError::NoOutbound);
             let mut futs = FuturesUnordered::new();
@@ -163,7 +163,7 @@ pub async fn dial_stream(
             }
         }
         (HostName::DomainName(domain), None, Some(bind_v6)) => {
-            println!("🌐 使用系统解析器(IPv6): {}", domain);
+            println!("🌹tcp客户端使用系统解析器(IPv6): {}", domain);
             let ips = resolver.resolve_ipv6(domain).await?;
             let mut ret = Err(FlowError::NoOutbound);
             let mut futs = FuturesUnordered::new();
@@ -198,7 +198,7 @@ pub async fn dial_stream(
             }
         }
         (HostName::DomainName(domain), Some(bind_v4), Some(bind_v6)) => {
-            println!("🌐 使用系统解析器(双栈): {}", domain);
+            println!("🌹tcp客户端使用系统解析器(双栈): {}", domain);
             let (ip_tx, mut ip_rx) = tokio::sync::mpsc::channel::<IpAddr>(1);
             tokio::spawn({
                 let resolver = resolver.clone();
@@ -249,9 +249,10 @@ pub async fn dial_stream(
     };
 
     if !initial_data.is_empty() {
-        info!("正在发送初始数据...");
+        println!("🌹tcp客户端初始数据长度: {},数据是{:0X?}", initial_data.len(), initial_data);
+        println!("🌹tcp客户端正在发送初始数据...");
         tcp_stream.write_all(initial_data).await?;
-        info!("初始数据发送完成");
+        println!("🌹tcp客户端初始数据发送完成");
     }
 
     Ok((Box::new(CompatFlow::new(tcp_stream, 4096)), Buffer::new()))

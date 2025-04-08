@@ -88,7 +88,7 @@ fn poll_forward_oneway(
                 match ready!(rx.poll_rx_buffer(cx)) {
                     Ok(buf) => {
                         let len = buf.len();
-                        println!("tcp客户端接收到来自服务端的数据长度: {},数据是{:0X?}", len, buf);
+                        println!("🌹tcp客户端接收到来自服务端的数据长度: {},数据是{:0X?}", len, buf);
                         tx.commit_tx_buffer(buf)?;
                         counter.fetch_add(len as u64, Ordering::Relaxed);
                         ForwardState::AwatingSizeHint
@@ -289,7 +289,7 @@ impl StreamForwardHandler {
 
 impl StreamHandler for StreamForwardHandler {
     fn on_stream(&self, lower: Box<dyn Stream>, initial_data: Buffer, context: Box<FlowContext>) {
-        println!("开始调用StreamForwardHandler");
+        println!("🌹tcp客户端开始调用StreamForwardHandler");
         if let Some(outbound) = self.outbound.upgrade() {
             let stat = StatGuard(self.stat.clone());
             stat.0
