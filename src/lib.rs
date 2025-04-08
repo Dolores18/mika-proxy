@@ -71,6 +71,9 @@ mod fakeip;
 use fakeip::*;
 mod ip_stack;
 use ip_stack::*;
+mod tun;
+use tun::*;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerStatus {
     pub server_address: String,
@@ -801,5 +804,49 @@ pub async fn start_dispatcher_server(
     )?;
 
     tokio::try_join!(handle_v4, handle_v6)?;
+    Ok(())
+}
+
+/// 启动TUN服务器，创建虚拟网络接口并初始化IP栈
+pub async fn start_tun_server(
+    tun_name: &str,
+    tun_ip: Ipv4Addr,
+    tun_netmask: Ipv4Addr,
+    mtu: Option<usize>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // 初始化MacTun设备
+    info!("初始化MacTun设备: {}", tun_name);
+    let tun = MacTun::new(tun_name, tun_ip, tun_netmask, mtu).await?;
+    let tun_arc = Arc::new(tun);
+    
+    info!("TUN设备已创建: {}", tun_arc.get_name());
+    info!("TUN设备IP地址: {}", tun_arc.get_address());
+    
+    // 创建一个简单的TCP流处理器 - 只是记录连接但不做实际处理
+    let tcp_handler = Arc::new(StreamForwardHandler {
+        request_timeout: 5000, // 5秒超时
+        outbound: Weak::new(),
+        stat: StatHandle::default(),
+    });
+    
+    // 创建简单的UDP处理器
+    let udp_handler = Arc::new(DatagramForwardHandler {
+        outbound: Weak::new(),
+        stat: StatHandle::default(),
+    });
+    
+    // 运行IP栈
+    info!("启动IP栈...");
+    let ip_stack_task = ip_stack::run(
+        tun_arc.clone(),
+        Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>,
+        Arc::downgrade(&udp_handler) as Weak<dyn DatagramSessionHandler>
+    );
+    
+    info!("TUN服务器启动完成");
+    
+    // 等待IP栈任务完成（实际上这个任务应该会一直运行）
+    ip_stack_task.await?;
+    
     Ok(())
 }
