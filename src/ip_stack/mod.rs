@@ -271,6 +271,31 @@ fn process_tcp(
     is_syn: bool,
     packet: Buffer,
 ) {
+    println!("📦 收到 TCP 数据包:");
+    println!("  源地址: {}", src_addr);
+    println!("  目标地址: {}", dst_addr);
+    println!("  目标端口: {}", dst_port);
+    println!("  是否是 SYN: {}", is_syn);
+    println!("  数据包长度: {} 字节", packet.len());
+    
+    // 打印数据包内容（十六进制）
+    println!("  数据包内容（十六进制）:");
+    let mut hex_str = String::new();
+    for (i, byte) in packet.iter().enumerate() {
+        if i % 16 == 0 {
+            if !hex_str.is_empty() {
+                println!("    {}", hex_str);
+                hex_str.clear();
+            }
+            print!("    {:04x}: ", i);
+        }
+        print!("{:02x} ", byte);
+        hex_str.push(if (32..127).contains(byte) { *byte as char } else { '.' });
+    }
+    if !hex_str.is_empty() {
+        println!("    {}", hex_str);
+    }
+
     let mut guard = stack.lock().unwrap();
     let IpStackInner {
         netif,
@@ -284,28 +309,29 @@ fn process_tcp(
     dev.rx = Some(packet);
 
     let tcp_socket_count = tcp_sockets.len();
+    println!("  当前 TCP 连接数: {}", tcp_socket_count);
+
     if let Entry::Vacant(vac) = tcp_sockets.entry(src_addr) {
         if !is_syn || tcp_socket_count >= 1 << 10 {
+            println!("  ❌ 拒绝连接: 不是 SYN 包或连接数超限");
             return;
         }
         let next = match tcp_next.upgrade() {
             Some(n) => n,
-            None => return,
+            None => {
+                println!("  ❌ 无法获取 TCP 处理器");
+                return;
+            }
         };
+        println!("  ✅ 创建新的 TCP 连接");
         let mut socket = TcpSocket::new(
-            // Note: The buffer sizes effectively affect overall throughput.
             RingBuffer::new(vec![0; 1024 * 14]),
             RingBuffer::new(vec![0; 10240]),
         );
         socket
             .listen(IpEndpoint::new(dst_addr, dst_port))
-            // This unwrap cannot panic for a valid TCP packet because:
-            // 1) The socket is just created
-            // 2) dst_port != 0
             .unwrap();
         socket.set_nagle_enabled(false);
-        // The default ACK delay (10ms) significantly reduces uplink throughput.
-        // Maybe due to the delay when sending ACK packets?
         socket.set_ack_delay(None);
         let socket_handle = socket_set.add(socket);
         vac.insert(socket_handle);
@@ -316,6 +342,7 @@ fn process_tcp(
                 port: dst_port,
             },
         );
+        println!("  ✅ 启动 TCP 流处理任务");
         tokio::spawn({
             let stack = stack.clone();
             async move {
@@ -330,16 +357,19 @@ fn process_tcp(
                     tx_buf: Some((Vec::with_capacity(4 * 1024), 0)),
                 };
                 if stream.handshake().await.is_ok() {
+                    println!("  ✅ TCP 握手成功");
                     next.on_stream(Box::new(stream) as _, Buffer::new(), Box::new(ctx));
+                } else {
+                    println!("  ❌ TCP 握手失败");
                 }
             }
         });
+    } else {
+        println!("  ℹ️ 已存在的 TCP 连接");
     };
     let now = Instant::now();
     let _ = netif.poll(now.into(), dev, socket_set);
-    // Polling the socket may wake a read/write waker. When a task polls the tx/rx
-    // buffer from the corresponding stream, a delayed poll will be rescheduled.
-    // Therefore, we don't have to poll the socket here.
+    println!("  ✅ 完成网络接口轮询");
 }
 
 fn process_udp(
@@ -352,6 +382,16 @@ fn process_udp(
     println!("开始处理UDP包");
     println!("  源地址: {}, 目标地址: {}:{}, 负载长度: {}", src_addr, 
              smoltcp_addr_to_std(dst_addr), dst_port, payload.len());
+    
+    // 打印UDP数据包的十六进制内容
+    println!("  UDP数据包内容(十六进制):");
+    for (i, chunk) in payload.chunks(16).enumerate() {
+        let hex_values: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
+        let ascii_values: String = chunk.iter()
+            .map(|&b| if b >= 32 && b <= 126 { b as char } else { '.' })
+            .collect();
+        println!("  {:04x}: {:48} {}", i * 16, hex_values.join(" "), ascii_values);
+    }
     
     let mut guard = stack.lock().unwrap();
     let IpStackInner {

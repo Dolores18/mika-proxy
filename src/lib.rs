@@ -881,7 +881,7 @@ pub async fn start_tun1_server(
     // 运行IP栈
     trace!("准备启动 IP 栈任务");
     let ip_stack_task = ip_stack::run(
-        tun_arc.clone(),
+        tun_arc,
         Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>,
         Arc::downgrade(&udp_handler) as Weak<dyn DatagramSessionHandler>
     );

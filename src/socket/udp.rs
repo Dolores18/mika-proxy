@@ -225,8 +225,21 @@ impl<
         }
         Poll::Ready(())
     }
-    fn send_to(&mut self, dst: DestinationAddr, buf: Buffer) {
+    fn send_to(&mut self, mut dst: DestinationAddr, buf: Buffer) {
         let port = dst.port;
+        println!("目标地址是{:?}, 端口是{:?}", dst.host, port);
+        //dst.host = HostName::Ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)));
+        
+        println!("📤 UDP发送数据包: 目标={:?}, 长度={}", dst, buf.len());
+        println!("  数据包内容(十六进制):");
+        for (i, chunk) in buf.chunks(16).enumerate() {
+            let hex_values: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
+            let ascii_values: String = chunk.iter()
+                .map(|&b| if b >= 32 && b <= 126 { b as char } else { '.' })
+                .collect();
+            println!("  {:04x}: {:48} {}", i * 16, hex_values.join(" "), ascii_values);
+        }
+        
         match dst.host {
             HostName::Ip(IpAddr::V4(v4)) => {
                 self.tx_buf = Some((ResolvingAddr::Ready((Some(v4), None, port)), buf));
@@ -289,11 +302,26 @@ impl<
         let rx_v6_next = self.rx_v6_next;
         self.rx_v6_next = !rx_v6_next;
         // For fairness
-        if rx_v6_next {
+        let result = if rx_v6_next {
             poll_recv_from_two(cx, &mut self.socket_v6, &mut self.socket_v4)
         } else {
             poll_recv_from_two(cx, &mut self.socket_v4, &mut self.socket_v6)
+        };
+        
+        // 添加打印接收到的UDP数据包内容
+        if let Poll::Ready(Some((ref addr, ref buf))) = result {
+            println!("📥 UDP接收数据包: 来源={:?}, 长度={}", addr, buf.len());
+            println!("  数据包内容(十六进制):");
+            for (i, chunk) in buf.chunks(16).enumerate() {
+                let hex_values: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
+                let ascii_values: String = chunk.iter()
+                    .map(|&b| if b >= 32 && b <= 126 { b as char } else { '.' })
+                    .collect();
+                println!("  {:04x}: {:48} {}", i * 16, hex_values.join(" "), ascii_values);
+            }
         }
+        
+        result
     }
 }
 

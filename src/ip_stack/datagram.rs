@@ -20,6 +20,16 @@ impl MultiplexedDatagramSession for IpStackDatagramSession {
     fn send_to(&mut self, src: DestinationAddr, buf: Buffer) {
         println!("📤📤 准备发送UDP响应: 从{:?}发送到{:?}, 长度: {}", src, self.local_endpoint, buf.len());
         
+        // 打印UDP响应数据包的十六进制内容
+        println!("  UDP响应数据包内容(十六进制):");
+        for (i, chunk) in buf.chunks(16).enumerate() {
+            let hex_values: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
+            let ascii_values: String = chunk.iter()
+                .map(|&b| if b >= 32 && b <= 126 { b as char } else { '.' })
+                .collect();
+            println!("  {:04x}: {:48} {}", i * 16, hex_values.join(" "), ascii_values);
+        }
+        
         let payload_len: u16 = match buf.len().try_into().ok().filter(|&l| l <= 1500 - 48) {
             Some(l) => l,
             // Ignore oversized packet

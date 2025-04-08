@@ -161,42 +161,101 @@ impl MacTun {
 
     /// 配置系统路由表 - 只对特定IP进行代理
     fn configure_routing(&self) -> IoResult<()> {
-        // 只为特定IP添加路由
-        println!("配置路由: 只代理8.8.8.8");
+        // 为百度 IP 添加路由，通过 TUN 设备
+        println!("配置百度 IP 路由");
+        let baidu_ips = ["110.242.68.66", "39.156.66.10"];
         
-        // 为8.8.8.8添加路由
-        let cmd_result = Command::new("route")
-            .arg("-n")
-            .arg("add")
-            .arg("8.8.8.8")
-            .arg("-interface")
-            .arg(&self.name)
-            .output();
-            
-        match cmd_result {
-            Ok(output) => {
-                if output.status.success() {
-                    println!("✅ 成功添加8.8.8.8的路由");
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    eprintln!("❌ 添加8.8.8.8路由失败: {}", stderr);
+        for ip in baidu_ips.iter() {
+            let route_result = Command::new("route")
+                .arg("-n")
+                .arg("add")
+                .arg(ip)
+                .arg("-interface")
+                .arg(&self.name)
+                .output();
+
+            match route_result {
+                Ok(output) => {
+                    if output.status.success() {
+                        println!("✅ 成功添加 {} 的路由", ip);
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        eprintln!("❌ 添加 {} 路由失败: {}", ip, stderr);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("❌ 执行 {} 路由命令失败: {}", ip, e);
+                    return Err(e);
                 }
-            },
-            Err(e) => {
-                eprintln!("❌ 执行route命令失败: {}", e);
-                return Err(e);
             }
+        }
+
+        // 为 DNS 服务器添加直连路由
+        println!("配置 DNS 服务器直连路由");
+        if let Some((gateway, _)) = &self.original_routes.lock().unwrap().default_gateway {
+            // 为 8.8.8.8 添加直连路由
+            let direct_route_result = Command::new("route")
+                .arg("-n")
+                .arg("add")
+                .arg("8.8.8.8")
+                .arg("-gateway")
+                .arg(gateway)
+                .output();
+
+            match direct_route_result {
+                Ok(output) => {
+                    if output.status.success() {
+                        println!("✅ 成功添加 8.8.8.8 直连路由");
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        eprintln!("❌ 添加 8.8.8.8 直连路由失败: {}", stderr);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("❌ 执行 8.8.8.8 直连路由命令失败: {}", e);
+                    return Err(e);
+                }
+            }
+
+            // 为 1.1.1.1 添加直连路由
+            let cloudflare_route_result = Command::new("route")
+                .arg("-n")
+                .arg("add")
+                .arg("1.1.1.1")
+                .arg("-gateway")
+                .arg(gateway)
+                .output();
+
+            match cloudflare_route_result {
+                Ok(output) => {
+                    if output.status.success() {
+                        println!("✅ 成功添加 1.1.1.1 直连路由");
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        eprintln!("❌ 添加 1.1.1.1 直连路由失败: {}", stderr);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("❌ 执行 1.1.1.1 直连路由命令失败: {}", e);
+                    return Err(e);
+                }
+            }
+        } else {
+            eprintln!("❌ 无法获取原始默认网关");
+            return Err(io::Error::new(io::ErrorKind::Other, "无法获取原始默认网关"));
         }
         
         // 测试路由是否工作
         println!("正在测试路由配置...");
-        let _ = Command::new("ping")
-            .arg("-c")
-            .arg("1")
-            .arg("-t")
-            .arg("1")
-            .arg("8.8.8.8")
-            .output();
+        for ip in baidu_ips.iter() {
+            let _ = Command::new("ping")
+                .arg("-c")
+                .arg("1")
+                .arg("-t")
+                .arg("1")
+                .arg(ip)
+                .output();
+        }
             
         Ok(())
     }   
