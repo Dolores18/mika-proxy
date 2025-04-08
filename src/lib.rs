@@ -813,7 +813,11 @@ pub async fn start_tun_server(
     tun_ip: Ipv4Addr,
     tun_netmask: Ipv4Addr,
     mtu: Option<usize>,
+    server_config: ServerConfig,
+    app_config: config::AppConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // 创建系统解析器
+    let system_resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
     // 初始化MacTun设备
     info!("初始化MacTun设备: {}", tun_name);
     let tun = MacTun::new(tun_name, tun_ip, tun_netmask, mtu).await?;
@@ -821,20 +825,60 @@ pub async fn start_tun_server(
     
     info!("TUN设备已创建: {}", tun_arc.get_name());
     info!("TUN设备IP地址: {}", tun_arc.get_address());
+       // 修改代理地址创建方式
+    let server_config_clone = Arc::new(server_config.clone());
+    let proxy_addr = server_config_clone.create_fixed_adrr();
+
+    // 创建 Shadowsocks 工厂，使用配置中的密钥
+    let psd = &app_config.features.ss_key;
+    let key = BASE64.decode(psd).expect("Failed to decode");
+    let key: [u8; 16] = key.try_into().expect("Invalid key length");   
     
-    // 创建一个简单的TCP流处理器 - 只是记录连接但不做实际处理
-    let tcp_handler = Arc::new(StreamForwardHandler {
-        request_timeout: 5000, // 5秒超时
-        outbound: Weak::new(),
-        stat: StatHandle::default(),
+    let socket_outbound_factory2 = Arc::new(SocketOutboundFactory {
+        resolver: Arc::downgrade(&system_resolver),
+        bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+        bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
+    log::debug!("Created system resolver and DoH resolver");
+
+    // 统计对象
+    let stat = forward::StatHandle::default();
     
-    // 创建简单的UDP处理器
-    let udp_handler = Arc::new(DatagramForwardHandler {
-        outbound: Weak::new(),
-        stat: StatHandle::default(),
+  
+    // 创建重定向工厂
+    let redirect_factory = Arc::new(StreamRedirectOutboundFactory {
+        remote_peer: proxy_addr.clone(),
+        next: Arc::downgrade(&socket_outbound_factory2) as Weak<dyn StreamOutboundFactory>,
     });
-    
+
+
+
+    let ss_factory = Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
+        key,
+        Arc::downgrade(&redirect_factory) as Weak<dyn StreamOutboundFactory>,
+    ));
+    // 创建 StreamForwardHandler 实例，
+    let tcp_handler = Arc::new(forward::StreamForwardHandler {
+        outbound: Arc::downgrade(&ss_factory) as Weak<dyn StreamOutboundFactory>,
+        request_timeout: 10000,
+        stat: stat,
+    });
+
+
+    // 创建统计对象
+    let stat = forward::StatHandle::default();
+
+    // 创建 UDP 出站工厂
+    let socket_outbound_factory = Arc::new(SocketOutboundFactory {
+        resolver: Arc::downgrade(&system_resolver),
+        bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+        bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
+    });
+    // 创建 UDP 转发处理器
+    let udp_handler = Arc::new(forward::DatagramForwardHandler {
+        outbound: Arc::downgrade(&socket_outbound_factory) as Weak<dyn DatagramSessionFactory>,
+        stat: stat,
+    });
     // 运行IP栈
     info!("启动IP栈...");
     let ip_stack_task = ip_stack::run(
