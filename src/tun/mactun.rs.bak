@@ -101,8 +101,9 @@ impl MacTun {
         mtu: Option<usize>
     ) -> IoResult<Self> {
         // 使用传入的IP地址和掩码
-        // 禁用IPv6，防止系统发送自动配置和路由公告包
-        let address_v6 = None; // 之前是: Some("fd00::2".parse::<Ipv6Addr>().expect("无效的IPv6地址"))
+        let address_v6 = Some(
+            "fd00::2".parse::<Ipv6Addr>().expect("无效的IPv6地址")
+        );
         
         // 备份当前路由配置
         let original_routes = Arc::new(Mutex::new(OriginalRoutes::backup()));
@@ -155,72 +156,48 @@ impl MacTun {
         Ok(mac_tun)
     }
 
-    /// 执行路由命令并处理结果
-    fn execute_route_cmd(&self, action: &str, target: &str, interface: Option<&str>) -> IoResult<()> {
-        let mut cmd = Command::new("route");
-        cmd.arg("-n").arg(action);
-        
-        // 根据目标格式决定是否添加-net参数
-        if target.contains("/") {
-            cmd.arg("-net");
-        }
-        
-        cmd.arg(target);
-        
-        // 对于添加操作，如果提供了接口则使用接口路由
-        if action == "add" && interface.is_some() {
-            cmd.arg("-interface").arg(interface.unwrap());
-        }
-        
-        let result = cmd.output();
-        
-        match result {
-            Ok(output) => {
-                if output.status.success() {
-                    println!("✅ 成功{}路由: {}", if action == "add" { "添加" } else { "删除" }, target);
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    eprintln!("⚠️ {}路由 {} 时出现问题: {}", 
-                             if action == "add" { "添加" } else { "删除" }, 
-                             target, stderr);
-                }
-                Ok(())
-            },
-            Err(e) => {
-                eprintln!("⚠️ 执行route {}命令失败: {}", action, e);
-                Err(e)
-            }
-        }
-    }
-    
-    /// 添加路由
-    fn add_route(&self, target: &str, use_interface: bool) -> IoResult<()> {
-        if use_interface {
-            self.execute_route_cmd("add", target, Some(&self.name))
-        } else {
-            self.execute_route_cmd("add", target, None)
-        }
-    }
-    
-    /// 删除路由
-    fn delete_route(&self, target: &str) -> IoResult<()> {
-        self.execute_route_cmd("delete", target, None)
-    }
-
     /// 配置系统路由表 - 只对特定IP进行代理
     fn configure_routing(&self) -> IoResult<()> {
-        // 清理现有路由
+        // 删除所有现有的路由
         println!("清理现有路由...");
-        // 删除大网段路由
-        let _ = self.delete_route("0.0.0.0/1");
-        let _ = self.delete_route("1.1.1.1");
-        let _ = self.delete_route("128.0.0.0/1");
+        let _ = Command::new("route")
+            .arg("-n")
+            .arg("delete")
+            .arg("-net")
+            .arg("0.0.0.0/1")
+            .output();
+
+        let _ = Command::new("route")
+            .arg("-n")
+            .arg("delete")
+            .arg("-net")
+            .arg("128.0.0.0/1")
+            .output();
 
         // 添加FakeIP范围路由
         println!("配置FakeIP范围路由 (198.18.0.0/15)...");
-        if let Err(e) = self.add_route("198.18.0.0/15", true) {
-            eprintln!("❌ 添加FakeIP范围路由失败");
-            return Err(e);
+        let fakeip_route = Command::new("route")
+            .arg("-n")
+            .arg("add")
+            .arg("-net")
+            .arg("198.18.0.0/15")
+            .arg("-interface")
+            .arg(&self.name)
+            .output();
+
+        match fakeip_route {
+            Ok(output) => {
+                if output.status.success() {
+                    println!("✅ 成功添加FakeIP范围路由");
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    eprintln!("❌ 添加FakeIP范围路由失败: {}", stderr);
+                }
+            },
+            Err(e) => {
+                eprintln!("❌ 执行FakeIP范围路由命令失败: {}", e);
+                return Err(e);
+            }
         }
 
         // 添加DNS服务器路由
@@ -228,9 +205,27 @@ impl MacTun {
         let dns_servers = ["8.8.8.8", "9.9.9.9"];
         
         for dns in dns_servers.iter() {
-            if let Err(e) = self.add_route(dns, true) {
-                eprintln!("❌ 添加DNS服务器 {} 路由失败", dns);
-                return Err(e);
+            let dns_route = Command::new("route")
+                .arg("-n")
+                .arg("add")
+                .arg(dns)
+                .arg("-interface")
+                .arg(&self.name)
+                .output();
+
+            match dns_route {
+                Ok(output) => {
+                    if output.status.success() {
+                        println!("✅ 成功添加DNS服务器 {} 的路由", dns);
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        eprintln!("❌ 添加DNS服务器 {} 路由失败: {}", dns, stderr);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("❌ 执行DNS服务器 {} 路由命令失败: {}", dns, e);
+                    return Err(e);
+                }
             }
         }
             
@@ -240,17 +235,27 @@ impl MacTun {
     /// 清理路由配置
     pub fn cleanup_routing(&self) -> IoResult<()> {
         // 移除特定IP的路由
-        println!("清理路由配置...");
-        
-        // 清理DNS服务器路由
-        let dns_servers = ["8.8.8.8", "9.9.9.9"];
-        for dns in dns_servers.iter() {
-            let _ = self.delete_route(dns);
+        println!("清理路由: 移除8.8.8.8的路由");
+        let cmd_result = Command::new("route")
+            .arg("-n")
+            .arg("delete")
+            .arg("8.8.8.8")
+            .output();
+            
+        match cmd_result {
+            Ok(output) => {
+                if output.status.success() {
+                    println!("✅ 成功移除8.8.8.8的路由");
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    eprintln!("⚠️ 移除8.8.8.8路由的过程中出现问题: {}", stderr);
+                }
+            },
+            Err(e) => {
+                eprintln!("⚠️ 执行route delete命令失败: {}", e);
+            }
         }
-        
-        // 清理FakeIP范围路由
-        let _ = self.delete_route("198.18.0.0/15");
-        
+
         // 恢复原始路由
         self.original_routes.lock().unwrap().restore();
         Ok(())
@@ -277,13 +282,13 @@ impl MacTun {
     /// 为指定目标添加直接路由（绕过TUN设备）
     pub fn add_direct_route(&self, dest: &str) -> IoResult<()> {
         if let Some((gateway, _)) = &self.original_routes.lock().unwrap().default_gateway {
-            let mut cmd = Command::new("route");
-            cmd.arg("-n")
-               .arg("add")
-               .arg(dest)
-               .arg("-gateway")
-               .arg(gateway)
-               .output()?;
+            Command::new("route")
+                .arg("-n")
+                .arg("add")
+                .arg(dest)
+                .arg("-gateway")
+                .arg(gateway)
+                .output()?;
         }
         Ok(())
     }
