@@ -19,7 +19,7 @@ use shadowsocks::factory::stream::*;
 mod socks5;
 use socks5::*;
 mod system_resolver;
-use log::{error, info};
+use log::{error, info, trace};
 use std::panic;
 use system_resolver::*;
 mod redirect;
@@ -808,7 +808,7 @@ pub async fn start_dispatcher_server(
 }
 
 /// 启动TUN服务器，创建虚拟网络接口并初始化IP栈
-pub async fn start_tun_server(
+pub async fn start_tun1_server(
     tun_name: &str,
     tun_ip: Ipv4Addr,
     tun_netmask: Ipv4Addr,
@@ -816,6 +816,7 @@ pub async fn start_tun_server(
     server_config: ServerConfig,
     app_config: config::AppConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    info!("开始初始化 TUN 服务器");
     // 创建系统解析器
     let system_resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
     // 初始化MacTun设备
@@ -851,8 +852,6 @@ pub async fn start_tun_server(
         next: Arc::downgrade(&socket_outbound_factory2) as Weak<dyn StreamOutboundFactory>,
     });
 
-
-
     let ss_factory = Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
         key,
         Arc::downgrade(&redirect_factory) as Weak<dyn StreamOutboundFactory>,
@@ -863,7 +862,6 @@ pub async fn start_tun_server(
         request_timeout: 10000,
         stat: stat,
     });
-
 
     // 创建统计对象
     let stat = forward::StatHandle::default();
@@ -879,18 +877,24 @@ pub async fn start_tun_server(
         outbound: Arc::downgrade(&socket_outbound_factory) as Weak<dyn DatagramSessionFactory>,
         stat: stat,
     });
+    
     // 运行IP栈
-    info!("启动IP栈...");
+    trace!("准备启动 IP 栈任务");
     let ip_stack_task = ip_stack::run(
         tun_arc.clone(),
         Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>,
         Arc::downgrade(&udp_handler) as Weak<dyn DatagramSessionHandler>
     );
     
+    trace!("IP 栈任务已启动，任务句柄: {:?}", ip_stack_task);
     info!("TUN服务器启动完成");
     
-    // 等待IP栈任务完成（实际上这个任务应该会一直运行）
-    ip_stack_task.await?;
+    // 不要等待IP栈任务完成，而是让程序保持运行
+    println!("TUN服务器正在运行 - 按Ctrl+C退出");
+    
+    // 等待中断信号
+    tokio::signal::ctrl_c().await?;
+    println!("收到中断信号，正在关闭TUN服务器...");
     
     Ok(())
 }

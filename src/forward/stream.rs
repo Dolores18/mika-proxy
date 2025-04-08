@@ -169,24 +169,24 @@ impl StreamForwardHandler {
         stat: StatGuard,
         mut context: Box<FlowContext>,
     ) -> FlowResult<()> {
-        info!("开始调用forward handlerstream");
-        info!("数据长度为{}", initial_data.len());
+        println!("开始调用forward handlerstream");
+        println!("数据长度为{}", initial_data.len());
 
         let mut initial_uplink_state = ForwardState::AwatingSizeHint;
         let initial_data = if !initial_data.is_empty() {
-            info!("initial_dat存在");
+            println!("initial_dat存在");
             Some(initial_data)
         } else if request_timeout == 0 {
-            info!("超时了");
+            println!("超时了");
 
             None
         } else {
-            info!("尝试重新读取");
+            println!("尝试重新读取");
             timeout(tokio::time::Duration::from_millis(request_timeout), async {
                 let size = crate::get_request_size_boxed!(lower)?;
                 initial_uplink_state = ForwardState::PollingTxBuf(size);
                 let buf = Vec::with_capacity(size.with_min_content(4096));
-                info!("让下一级出站工厂进行发送数据的操作");
+                println!("让下一级出站工厂进行发送数据的操作");
 
                 lower.as_mut().commit_rx_buffer(buf).map_err(|(_, e)| e)?;
                 //获取一个rx_buf接受缓冲区
@@ -210,7 +210,7 @@ impl StreamForwardHandler {
 
         // TODO: outbound handshake timeout
         let initial_data_ref = initial_data.as_deref().unwrap_or(&[]);
-        info!("转发入站流量到出战工厂进行处理");
+        println!("转发入站流量到出战工厂进行处理");
 
         let outbound = outbound_factory
             .create_outbound(&mut context, initial_data_ref)
@@ -226,20 +226,20 @@ impl StreamForwardHandler {
                 // TODO: log error
                 // Shutdown inbound normally since it is the outbound that faults.
                 // Be careful not to trigger drainage etc. for the inbound in this case.
-                info!("没有获得响应的数据");
+                println!("没有获得响应的数据");
                 return crate::close_tx_boxed!(lower).and_then(|()| Err(e))?;
             }
         };
-        info!(
+        println!(
             "中转器获得响应数据{:0X?}\n{}",
             initial_res,
             initial_res.len()
         );
         if let Ok(initial_res_len) = NonZeroUsize::try_from(initial_res.len()) {
-            info!("将流量转发给入站端");
+            println!("将流量转发给入站端");
             let mut buf = crate::get_tx_buffer_boxed!(lower, initial_res_len)?;
             buf.extend_from_slice(&initial_res);
-            info!("中转器接收到的响应数据为数据为\n{:0X?}", buf);
+            println!("中转器接收到的响应数据为数据为\n{:0X?}", buf);
 
             lower.as_mut().commit_tx_buffer(buf)?;
             stat.0
@@ -289,7 +289,7 @@ impl StreamForwardHandler {
 
 impl StreamHandler for StreamForwardHandler {
     fn on_stream(&self, lower: Box<dyn Stream>, initial_data: Buffer, context: Box<FlowContext>) {
-        info!("开始调用StreamForwardHandler");
+        println!("开始调用StreamForwardHandler");
         if let Some(outbound) = self.outbound.upgrade() {
             let stat = StatGuard(self.stat.clone());
             stat.0

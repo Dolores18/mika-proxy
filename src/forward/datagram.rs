@@ -20,6 +20,7 @@ impl DatagramSessionHandler for DatagramForwardHandler {
         };
         let stat = self.stat.clone();
         tokio::spawn(async move {
+            println!("开始创建UDP会话");
             let mut lower = outbound.bind(context).await?;
             struct StatCountGuard(StatHandle);
             impl Drop for StatCountGuard {

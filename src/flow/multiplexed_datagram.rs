@@ -53,9 +53,11 @@ impl<S: MultiplexedDatagramSession> DatagramSession for MultiplexedDatagramSessi
         self.inner.poll_send_ready(cx)
     }
     fn send_to(&mut self, src: DestinationAddr, buf: Buffer) {
+        println!("🔄 MultiplexedDatagramSessionAdapter.send_to: 从{:?}发送到inner, 长度: {}", src, buf.len());
         self.has_io_within_tick = true;
         if self.rx.is_none() {
             // Already closed
+            println!("❌ 会话已关闭，无法发送");
             return;
         }
         self.inner.send_to(src, buf);
@@ -66,8 +68,12 @@ impl<S: MultiplexedDatagramSession> DatagramSession for MultiplexedDatagramSessi
             None => return Poll::Ready(None),
         });
         match rx.poll_next(cx) {
-            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(None) => {
+                println!("🔄 MultiplexedDatagramSessionAdapter.poll_recv_from: 接收通道已关闭");
+                Poll::Ready(None)
+            },
             Poll::Ready(Some((dst, buf))) => {
+                println!("🔄 MultiplexedDatagramSessionAdapter.poll_recv_from: 接收到目标{:?}的数据, 长度: {}", dst, buf.len());
                 self.has_io_within_tick = true;
                 Poll::Ready(Some((dst, buf)))
             }
@@ -77,6 +83,7 @@ impl<S: MultiplexedDatagramSession> DatagramSession for MultiplexedDatagramSessi
                 if std::mem::replace(&mut self.has_io_within_tick, false) {
                     Poll::Pending
                 } else {
+                    println!("🔄 MultiplexedDatagramSessionAdapter.poll_recv_from: 会话超时未活动，关闭中");
                     self.close();
                     Poll::Ready(None)
                 }

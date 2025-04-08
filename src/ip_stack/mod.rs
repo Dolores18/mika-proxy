@@ -349,6 +349,10 @@ fn process_udp(
     dst_port: u16,
     payload: &mut [u8],
 ) {
+    println!("开始处理UDP包");
+    println!("  源地址: {}, 目标地址: {}:{}, 负载长度: {}", src_addr, 
+             smoltcp_addr_to_std(dst_addr), dst_port, payload.len());
+    
     let mut guard = stack.lock().unwrap();
     let IpStackInner {
         udp_sockets,
@@ -356,15 +360,24 @@ fn process_udp(
         ..
     } = &mut *guard;
     let tx = match udp_sockets.entry(src_addr) {
-        Entry::Occupied(ent) => ent.into_mut(),
+        Entry::Occupied(ent) => {
+            println!("  找到已存在的UDP会话: {}", src_addr);
+            ent.into_mut()
+        }
         Entry::Vacant(vac) => {
+            println!("开始创建UDP会话");
             let next = match udp_next.upgrade() {
                 Some(next) => next,
-                None => return,
+                None => {
+                    println!("  无法获取UDP处理器引用，放弃处理");
+                    return;
+                }
             };
             let (tx, rx) = bounded(48);
             let stack_inner = stack.clone();
+            println!("  创建新的UDP会话: {}", src_addr);
             tokio::spawn(async move {
+                println!("  启动新的UDP会话处理器");
                 next.on_session(
                     Box::new(MultiplexedDatagramSessionAdapter::new(
                         datagram::IpStackDatagramSession {
@@ -382,18 +395,29 @@ fn process_udp(
                         },
                     )),
                 );
+                println!("  UDP会话处理器已启动");
             });
             vac.insert(tx)
         }
     };
-    if let Err(TrySendError::Disconnected(_)) = tx.try_send((
-        DestinationAddr {
-            host: HostName::Ip(smoltcp_addr_to_std(dst_addr)),
-            port: dst_port,
-        },
-        payload.to_vec(),
+    
+    let payload_copy = payload.to_vec();
+    let dest_addr = DestinationAddr {
+        host: HostName::Ip(smoltcp_addr_to_std(dst_addr)),
+        port: dst_port,
+    };
+    
+    println!("  尝试发送UDP数据到处理器");
+    match tx.try_send((
+        dest_addr,
+        payload_copy,
     )) {
-        udp_sockets.remove(&src_addr);
+        Ok(_) => println!("  成功将UDP数据包发送到处理器队列"),
+        Err(TrySendError::Full(_)) => println!("  处理器队列已满，丢弃数据包"),
+        Err(TrySendError::Disconnected(_)) => {
+            println!("  UDP会话已断开，移除会话");
+            udp_sockets.remove(&src_addr);
+        }
     }
     // Drop packet when buffer is full
 }
