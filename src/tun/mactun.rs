@@ -9,7 +9,7 @@ use tokio::sync::Mutex as TokioMutex;
 use std::path::PathBuf;
 use tun::AbstractDevice;
 use smoltcp::phy::TxToken as SmolTxToken;
-
+use log::info;
 // MacTun设备类型，使用tokio进行异步操作
 pub struct MacTun {
     // 内部tun设备实例
@@ -225,7 +225,7 @@ impl MacTun {
 
         // 添加DNS服务器路由
         println!("配置DNS服务器路由...");
-        let dns_servers = ["8.8.8.8", "9.9.9.9"];
+        let dns_servers = ["8.8.8.8", "9.9.9.9","39.156.66.10"];
         
         for dns in dns_servers.iter() {
             if let Err(e) = self.add_route(dns, true) {
@@ -243,7 +243,7 @@ impl MacTun {
         println!("清理路由配置...");
         
         // 清理DNS服务器路由
-        let dns_servers = ["8.8.8.8", "9.9.9.9"];
+        let dns_servers = ["8.8.8.8", "9.9.9.9", "39.156.66.10"];
         for dns in dns_servers.iter() {
             let _ = self.delete_route(dns);
         }
@@ -325,33 +325,33 @@ impl Tun for MacTun {
                             _ => "未知"
                         };
                         
-                        println!("📦 接收IP包: IPv4, 协议: {}({}), 源IP: {}, 目标IP: {}",
+                        info!("📦 接收IP包: IPv4, 协议: {}({}), 源IP: {}, 目标IP: {}",
                                 proto_name, protocol, src_ip, dst_ip);
                         
                         // 如果是TCP/UDP，尝试打印端口信息
                         if (protocol == 6 || protocol == 17) && buffer.len() >= (ihl + 4) as usize {
                             let src_port = (buffer[ihl as usize] as u16) << 8 | buffer[(ihl+1) as usize] as u16;
                             let dst_port = (buffer[(ihl+2) as usize] as u16) << 8 | buffer[(ihl+3) as usize] as u16;
-                            println!("📦 接收端口: 源端口: {}, 目标端口: {}", src_port, dst_port);
+                            info!("📦 接收端口: 源端口: {}, 目标端口: {}", src_port, dst_port);
                         }
                         
-                        println!("TUN设备接收: IP版本: {}, 协议: {}, 长度: {}", 
+                        info!("TUN设备接收: IP版本: {}, 协议: {}, 长度: {}", 
                                 version, protocol, buffer.len());
                     } else if version == 6 && buffer.len() >= 40 {  // IPv6
                         let next_header = buffer[6];
                         // 简化的IPv6地址打印
-                        println!("📦 接收IP包: IPv6, 下一头部: {}", next_header);
+                        info!("📦 接收IP包: IPv6, 下一头部: {}", next_header);
                         
-                        println!("🐶MACTUN: IP版本: {}, 协议: {}, 长度: {}", 
+                        info!("🐶MACTUN: IP版本: {}, 协议: {}, 长度: {}", 
                                 version, next_header, buffer.len());
                     } else {
-                        println!("🐶MACTUN: IP版本: {}, 长度: {}", version, buffer.len());
+                        info!("🐶MACTUN: IP版本: {}, 长度: {}", version, buffer.len());
                     }
                 } else {
-                    println!("🐶MACTUN: 数据包太小，无法解析IP头");
+                    info!("🐶MACTUN: 数据包太小，无法解析IP头");
                 }
                 
-                println!("🐶MACTUN: 收到数据包，长度: {}", buffer.len());
+                info!("🐶MACTUN: 收到数据包，长度: {}", buffer.len());
                 Some(buffer)
             },
             Err(e) => {
@@ -364,7 +364,7 @@ impl Tun for MacTun {
     
     fn return_recv_buffer(&self, buf: Buffer) {
         // 将缓冲区放回池中以便重用
-        println!("🐶MACTUN: 返还接收缓冲区，长度: {}", buf.len());
+        info!("🐶MACTUN: 返还接收缓冲区，长度: {}", buf.len());
         self.buffer_pool.lock().unwrap().push_back(buf);
     }
     
@@ -381,7 +381,7 @@ impl Tun for MacTun {
         // 构造签名
         let signature = [data_ptr as *mut usize, std::ptr::null_mut()];
         
-        println!("🐶MACTUN: 创建发送缓冲区，大小: {}", self.mtu);
+        info!("🐶MACTUN: 创建发送缓冲区，大小: {}", self.mtu);
         
         // 安全性：我们确保签名可以安全地发送到其他线程
         unsafe {
@@ -390,7 +390,7 @@ impl Tun for MacTun {
     }
     
     fn send(&self, buf: TunBufferToken, len: usize) {
-        println!("🐶MACTUN: 发送数据包，长度: {}", len);
+        println!("🍓MACTUN: 发送数据包，长度: {}", len);
         
         let (signature, data) = buf.into_parts();
         
@@ -411,19 +411,19 @@ impl Tun for MacTun {
                     _ => "未知"
                 };
                 
-                println!("📦 IP包详情: IPv4, 协议: {}({}), 源IP: {}, 目标IP: {}", 
+                info!("📦 IP包详情: IPv4, 协议: {}({}), 源IP: {}, 目标IP: {}", 
                         proto_name, protocol, src_ip, dst_ip);
                 
                 // 如果是TCP/UDP，尝试打印端口信息
                 if (protocol == 6 || protocol == 17) && len >= (ihl + 4) as usize {
                     let src_port = (data[ihl as usize] as u16) << 8 | data[(ihl+1) as usize] as u16;
                     let dst_port = (data[(ihl+2) as usize] as u16) << 8 | data[(ihl+3) as usize] as u16;
-                    println!("📦 端口信息: 源端口: {}, 目标端口: {}", src_port, dst_port);
+                    info!("📦 端口信息: 源端口: {}, 目标端口: {}", src_port, dst_port);
                 }
             } else if version == 6 && len >= 40 {  // IPv6
                 let next_header = data[6];
                 // 简化的IPv6地址打印
-                println!("📦 IP包详情: IPv6, 下一头部: {}", next_header);
+                info!("📦 IP包详情: IPv6, 下一头部: {}", next_header);
             }
         }
         
@@ -445,14 +445,14 @@ impl Tun for MacTun {
             if let Err(e) = device_guard.write(&data_to_send).await {
                 eprintln!("写入TUN设备错误: {}", e);
             } else {
-                println!("TUN: 成功写入MacTun设备 {} 字节, 数据包内容(十六进制): {:02x?}", data_to_send.len(), data_to_send);
+                info!("TUN: 成功写入MacTun设备 {} 字节, 数据包内容(十六进制): {:02x?}", data_to_send.len(), data_to_send);
             }
         });
     }
     
     fn return_tx_buffer(&self, buf: TunBufferToken) {
         // 释放缓冲区
-        println!("TUN: 返还发送缓冲区");
+        info!("TUN: 返还发送缓冲区");
         unsafe {
             let (signature, _) = buf.into_parts();
             let data_ptr = signature[0] as *mut Vec<u8>;

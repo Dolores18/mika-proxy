@@ -105,15 +105,49 @@ impl<'d> smoltcp::phy::TxToken for TxToken<'d> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        let buf = self
-            .0
-            .as_mut()
-            .expect("Consuming a TxToken without tx buffer set");
-        if len > buf.data.len() {
-            panic!("smoltcp cannot write a packet to a TUN interface with smaller MTU set.")
+        // 检查缓冲区是否存在
+        if self.0.is_none() {
+            println!("🔴错误: TxToken中缓冲区为空! Consuming a TxToken without tx buffer set");
+            // 创建一个空结果返回，避免panic
+            return f(&mut []);
         }
+        
+        let buf = self.0.as_mut().unwrap();
+        
+        // 检查长度是否超过限制
+        if len > buf.data.len() {
+            println!("🔴错误: 数据长度{}超过缓冲区大小{}! smoltcp cannot write a packet to a TUN interface with smaller MTU set.",
+                    len, buf.data.len());
+            
+            // 使用可用缓冲区尽可能运行函数
+            let res = f(&mut buf.data);
+            return res;
+        }
+        
+        println!("✅准备将数据写入缓冲区，长度: {}", len);
         let res = f(&mut buf.data[..len]);
-        self.1.send(self.0.take().unwrap(), len);
+        println!("🍎ip_stack与tun交互，长度: {}", len);
+        
+        // 安全地获取缓冲区并发送
+        match self.0.take() {
+            Some(buffer) => {
+                println!("✅发送数据到TUN设备，长度: {}", len);
+                // 打印缓冲区内容帮助调试
+                if len > 0 && len <= 64 {
+                    println!("✅发送数据内容(前{}字节): {:02x?}", 
+                             std::cmp::min(len, 64), 
+                             &buffer.data[..std::cmp::min(len, 64)]);
+                }
+                
+                // 发送数据到TUN设备
+                self.1.send(buffer, len);
+                println!("✅数据已发送到TUN设备");
+            },
+            None => {
+                println!("🔴错误: 尝试发送数据时缓冲区为空!");
+            }
+        }
+        
         res
     }
 }
@@ -169,8 +203,10 @@ pub fn run(
         tcp_next,
         udp_next,
     }));
+    println!("🍎ip_stack: 启动IP栈");
     tokio::runtime::Handle::current().spawn_blocking(move || {
         while let Some(recv_buf) = tun.blocking_recv() {
+            println!("🍎ip_stack: 收到数据包，长度: {}, 数据包内容(十六进制): {:02x?}", recv_buf.len(), recv_buf);
             process_packet(&stack, recv_buf);
         }
     })
@@ -194,6 +230,8 @@ fn process_packet(stack: &IpStack, packet: Buffer) {
                         Err(_) => return,
                     };
                     let (src_port, dst_port, is_syn) = (p.src_port(), p.dst_port(), p.syn());
+                    println!("🍎ip_stack: TCP包，源端口: {}, 目标端口: {}, SYN: {}", src_port, dst_port, is_syn);
+                 
                     process_tcp(
                         stack,
                         SocketAddr::new(smoltcp_addr_to_std(src_addr.into()), src_port),
@@ -271,33 +309,10 @@ fn process_tcp(
     is_syn: bool,
     packet: Buffer,
 ) {
-    println!("📦 收到 TCP 数据包:");
-    println!("  源地址: {}", src_addr);
-    println!("  目标地址: {}", dst_addr);
-    println!("  目标端口: {}", dst_port);
-    println!("  是否是 SYN: {}", is_syn);
-    println!("  数据包长度: {} 字节", packet.len());
+    println!("🍎ip_stack: TCP包，数据包内容(十六进制): {:02x?}", packet);
+
     
-    // 打印数据包内容（十六进制）
-    println!("🍎数据包内容（十六进制）:");
-    for (i, chunk) in packet.chunks(16).enumerate() {
-        let mut hex_line = format!("    {:04x}: ", i * 16);
-        let mut ascii_line = String::new();
-        
-        for byte in chunk {
-            hex_line.push_str(&format!("{:02x} ", byte));
-            ascii_line.push(if (32..127).contains(byte) { *byte as char } else { '.' });
-        }
-        
-        // 对齐ASCII部分
-        if chunk.len() < 16 {
-            for _ in 0..(16 - chunk.len()) {
-                hex_line.push_str("   ");
-            }
-        }
-        
-        println!("{} {}", hex_line, ascii_line);
-    }
+
 
     let mut guard = stack.lock().unwrap();
     let IpStackInner {
@@ -326,7 +341,7 @@ fn process_tcp(
                 return;
             }
         };
-        println!(" 🍎创建新的 TCP 连接");
+        println!(" 🍎创建新的 TCP 连接创建内部发送缓冲区和接受缓冲区");
         let mut socket = TcpSocket::new(
             RingBuffer::new(vec![0; 1024 * 14]),
             RingBuffer::new(vec![0; 10240]),

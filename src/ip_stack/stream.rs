@@ -93,6 +93,7 @@ impl Stream for IpStackStream {
         let (buffer, read_at) = tx_buf
             .as_mut()
             .expect("IpStackStream: cannot pull buffer without committing");
+        println!("🍎ip_stack: 获取提交缓冲区: {}", size.get());
         while buffer.capacity() >= size.get()
             && buffer.capacity() - buffer.len() + *read_at < size.get()
         {
@@ -117,7 +118,9 @@ impl Stream for IpStackStream {
     }
 
     fn commit_tx_buffer(&mut self, buffer: Buffer) -> FlowResult<()> {
+        println!("🍎ip_stack: 提交数据包，长度: {}", buffer.len());
         self.tx_buf = Some((buffer, 0));
+     
         Ok(())
     }
 
@@ -165,6 +168,7 @@ impl Stream for IpStackStream {
             }
         });
         socket_guard.poll();
+        println!("🍎ip_stack: 关闭数据包");
         res
     }
 }
@@ -176,5 +180,6 @@ impl Drop for IpStackStream {
         socket_guard.with_socket(|s| s.abort());
         socket_guard.poll();
         socket_guard.guard.tcp_sockets.remove(&local_endpoint);
+        println!("🍎ip_stack: 关闭数据包");
     }
 }
