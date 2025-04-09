@@ -351,7 +351,7 @@ impl Tun for MacTun {
         println!("🍓MACTUN: 发送数据包，长度: {}", len);
         
         let (signature, data) = buf.into_parts();
-        
+        println!("🍓MACTUN: 发送数据包，签名是: {:?}, data长度: {},data内容: {:02x?}", signature, data.len(), data);
         // 添加额外日志，分析IP包内容
         if len >= 20 {  // IP包头至少20字节
             let version = data[0] >> 4;
