@@ -207,52 +207,17 @@ impl MacTun {
         self.execute_route_cmd("delete", target, None)
     }
 
-    /// 配置系统路由表 - 只对特定IP进行代理
+    /// 配置系统路由表 - 删除所有路由配置逻辑
     fn configure_routing(&self) -> IoResult<()> {
-        // 清理现有路由
-        println!("清理现有路由...");
-        // 删除大网段路由
-        let _ = self.delete_route("0.0.0.0/1");
-        let _ = self.delete_route("1.1.1.1");
-        let _ = self.delete_route("128.0.0.0/1");
-
-        // 添加FakeIP范围路由
-        println!("配置FakeIP范围路由 (198.18.0.0/15)...");
-        if let Err(e) = self.add_route("198.18.0.0/15", true) {
-            eprintln!("❌ 添加FakeIP范围路由失败");
-            return Err(e);
-        }
-
-        // 添加DNS服务器路由
-        println!("配置DNS服务器路由...");
-        let dns_servers = ["8.8.8.8", "9.9.9.9","39.156.66.10"];
-        
-        for dns in dns_servers.iter() {
-            if let Err(e) = self.add_route(dns, true) {
-                eprintln!("❌ 添加DNS服务器 {} 路由失败", dns);
-                return Err(e);
-            }
-        }
-            
+        // 不再配置任何路由
+        println!("路由配置已禁用，不再添加任何路由规则");
         Ok(())
     }
 
-    /// 清理路由配置
+    /// 清理路由配置 - 删除所有清理逻辑
     pub fn cleanup_routing(&self) -> IoResult<()> {
-        // 移除特定IP的路由
-        println!("清理路由配置...");
-        
-        // 清理DNS服务器路由
-        let dns_servers = ["8.8.8.8", "9.9.9.9", "39.156.66.10"];
-        for dns in dns_servers.iter() {
-            let _ = self.delete_route(dns);
-        }
-        
-        // 清理FakeIP范围路由
-        let _ = self.delete_route("198.18.0.0/15");
-        
-        // 恢复原始路由
-        self.original_routes.lock().unwrap().restore();
+        // 不再清理任何路由
+        println!("路由清理已禁用");
         Ok(())
     }
 
@@ -274,17 +239,10 @@ impl MacTun {
             .map(|(gateway, _)| gateway.clone())
     }
 
-    /// 为指定目标添加直接路由（绕过TUN设备）
-    pub fn add_direct_route(&self, dest: &str) -> IoResult<()> {
-        if let Some((gateway, _)) = &self.original_routes.lock().unwrap().default_gateway {
-            let mut cmd = Command::new("route");
-            cmd.arg("-n")
-               .arg("add")
-               .arg(dest)
-               .arg("-gateway")
-               .arg(gateway)
-               .output()?;
-        }
+    /// 为指定目标添加直接路由（绕过TUN设备）- 删除此功能
+    pub fn add_direct_route(&self, _dest: &str) -> IoResult<()> {
+        // 不再添加任何直接路由
+        println!("直接路由功能已禁用");
         Ok(())
     }
 }

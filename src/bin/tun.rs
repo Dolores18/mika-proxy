@@ -18,8 +18,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 解析命令行参数
     let args: Vec<String> = std::env::args().collect();
     let mut tun_name = "utun7".to_string();  // 默认TUN设备名称
-    // 使用硬编码的IP地址，与mactun.rs保持一致
-    let tun_ip = Ipv4Addr::from_str("192.168.3.1").unwrap();
+    // 使用硬编码的IP地址，更改为172.16.0.1保留地址
+    let tun_ip = Ipv4Addr::from_str("172.16.0.1").unwrap();
     let tun_netmask = Ipv4Addr::from_str("255.255.255.0").unwrap();
     let mut mtu = Some(1500);
     
