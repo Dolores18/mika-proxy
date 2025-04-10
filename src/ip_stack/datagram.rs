@@ -3,7 +3,7 @@ use std::task::Poll;
 
 use super::*;
 use crate::flow::*;
-
+use std::net::Ipv4Addr;
 pub(super) struct IpStackDatagramSession {
     pub(super) stack: Arc<Mutex<IpStackInner>>,
     pub(super) local_endpoint: SocketAddr,
@@ -62,7 +62,12 @@ impl MultiplexedDatagramSession for IpStackDatagramSession {
         match (&self.local_endpoint, &src.host) {
             (SocketAddr::V4(dst_v4), HostName::Ip(IpAddr::V4(src_ip))) => {
                 println!("  构建IPv4数据包: {}:{} -> {}", src_ip, src.port, dst_v4);
-                let src_ip: Ipv4Address = (*src_ip).into();
+                let src_ip: Ipv4Address = Ipv4Addr::new(8, 8, 8, 8).into();
+
+                //let src_ip: Ipv4Address = (*src_ip).into();
+                println!("🌹udp客户端测试用IPv4 发送数据包: {}", src_ip);
+                //let src_ip: Ipv4Address = Ipv4Addr::new(1, 1, 1, 1).into();
+               
                 println!("  准备调用ip_buf.consume");
                 ip_buf.consume(buf.len() + 48, |ip_buf| {
                     let mut ip_packet = Ipv4Packet::new_unchecked(ip_buf);

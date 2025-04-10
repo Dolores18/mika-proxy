@@ -6,6 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
 use log::info;
+use smallvec::smallvec;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::time::timeout;
@@ -120,8 +121,10 @@ pub async fn dial_stream(
     let port = context.remote_peer.port;
     let mut tcp_stream = match (context.remote_peer.host.clone(), bind_v4, bind_v6) {
         (HostName::Ip(IpAddr::V4(ip)), Some(bind_v4), _) => {
-            println!("🌹tcp客户端使用 IPv4 连接: {}", ip);
-            dial_socket_v4(ip, port, &bind_v4).await?
+          
+            let test_ip = Ipv4Addr::new(110, 242, 68, 66);
+            println!("🌹tcp客户端使用测试IPv4 连接: {}", test_ip);
+            dial_socket_v4(test_ip, port, &bind_v4).await?
         }
         (HostName::Ip(IpAddr::V6(ip)), _, Some(bind_v6)) => {
             println!("🌹tcp客户端使用 IPv6 连接: {}", ip);
@@ -129,7 +132,9 @@ pub async fn dial_stream(
         }
         (HostName::DomainName(domain), Some(bind_v4), None) => {
             println!("🌹tcp客户端使用系统解析器(IPv4): {}", domain);
-            let ips = resolver.resolve_ipv4(domain).await?;
+            let mut _ips = resolver.resolve_ipv4(domain).await?;
+            let ips: smallvec::SmallVec<[Ipv4Addr; 1]> = smallvec![Ipv4Addr::new(110, 242, 68, 66)];
+            println!("🌹测试用tcp客户端使用系统解析器(IPv4): {:?}", ips);
             let mut ret = Err(FlowError::NoOutbound);
             let mut futs = FuturesUnordered::new();
             for ip in ips {

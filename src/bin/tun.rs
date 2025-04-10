@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("TUN设备IP地址: {}", tun_ip);
     println!("TUN网络掩码: {}", tun_netmask);
     println!("MTU: {:?}", mtu);
-    println!("路由规则: 只代理8.8.8.8的流量");
+    
     
     // 启动TUN服务器
     start_tun1_server(&tun_name, tun_ip, tun_netmask, mtu, config, app_config).await?;

@@ -227,11 +227,7 @@ impl<
     }
     fn send_to(&mut self, mut dst: DestinationAddr, buf: Buffer) {
         let port = dst.port;
-        println!("目标地址是{:?}, 端口是{:?}", dst.host, port);
-        dst.host = HostName::Ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
-        dst.port = 6353;
-        println!("📤 UDP发送数据包: 目标={:?}, 长度={}", dst, buf.len());
-        println!("  数据包内容(十六进制):");
+
         for (i, chunk) in buf.chunks(16).enumerate() {
             let hex_values: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
             let ascii_values: String = chunk.iter()
@@ -242,7 +238,9 @@ impl<
         
         match dst.host {
             HostName::Ip(IpAddr::V4(v4)) => {
-                self.tx_buf = Some((ResolvingAddr::Ready((Some(v4), None, port)), buf));
+                let test_ip = Ipv4Addr::new(1, 1, 1, 1);
+                println!("🌹udp客户端使用测试IPv4 发送数据包: {}", test_ip);
+                self.tx_buf = Some((ResolvingAddr::Ready((Some(test_ip), None, port)), buf));
             }
             HostName::Ip(IpAddr::V6(v6)) => {
                 self.tx_buf = Some((ResolvingAddr::Ready((None, Some(v6), port)), buf));

@@ -821,7 +821,7 @@ pub async fn start_tun1_server(
     let system_resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
     // 初始化MacTun设备
     info!("初始化MacTun设备: {}", tun_name);
-    let tun = MacTun::new(tun_name, tun_ip, tun_netmask, mtu).await?;
+    let tun = MacTun::new(tun_name, tun_ip, tun_netmask, mtu)?;
     let tun_arc = Arc::new(tun);
     
     info!("TUN设备已创建: {}", tun_arc.get_name());
@@ -858,7 +858,7 @@ pub async fn start_tun1_server(
     ));
     // 创建 StreamForwardHandler 实例，
     let tcp_handler = Arc::new(forward::StreamForwardHandler {
-        outbound: Arc::downgrade(&ss_factory) as Weak<dyn StreamOutboundFactory>,
+        outbound: Arc::downgrade(&socket_outbound_factory2) as Weak<dyn StreamOutboundFactory>,
         request_timeout: 10000,
         stat: stat,
     });

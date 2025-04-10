@@ -1,19 +1,28 @@
 use crate::flow::{Buffer, TunBufferToken, TunBufferSignature, Tun};
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
-use std::io::{self, Result as IoResult};
+use std::io::{self, Result as IoResult, Read, Write};
 use std::process::Command;
 use std::net::{Ipv4Addr, Ipv6Addr, IpAddr};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::Mutex as TokioMutex;
 use std::path::PathBuf;
 use tun::AbstractDevice;
 use smoltcp::phy::TxToken as SmolTxToken;
 use log::info;
-// MacTun设备类型，使用tokio进行异步操作
+use std::sync::mpsc::{self, Sender, Receiver};
+use std::thread;
+use std::time::Instant;
+
+// 定义写入任务结构体
+struct WriteTask {
+    data: Vec<u8>,
+    len: usize,
+    created_time: Instant,
+}
+
+// MacTun设备类型，使用同步设备
 pub struct MacTun {
-    // 内部tun设备实例
-    device: Arc<TokioMutex<tun::AsyncDevice>>,
+    // 内部tun设备实例，改为同步设备
+    device: Arc<Mutex<tun::Device>>,
     // 设备名称
     name: String,
     // 设备IP地址
@@ -28,6 +37,8 @@ pub struct MacTun {
     buffer_pool: Arc<Mutex<VecDeque<Buffer>>>,
     // 接收和发送缓冲区的大小
     mtu: usize,
+    // 写入任务发送通道
+    writer_tx: Sender<WriteTask>,
 }
 
 // 存储原始路由信息的结构
@@ -94,7 +105,7 @@ impl OriginalRoutes {
 
 impl MacTun {
     /// 创建并初始化MacTun设备
-    pub async fn new(
+    pub fn new(
         name: &str, 
         address: Ipv4Addr,  // 使用传入的IP地址
         netmask: Ipv4Addr,  // 使用传入的网络掩码
@@ -116,16 +127,37 @@ impl MacTun {
             .mtu(mtu.unwrap_or(1500) as u16)
             .up();
             
-        // 创建TUN设备
-        let device = tun::create_as_async(&config)?;
+        // 创建同步TUN设备
+        let device = tun::create(&config)?;
         // 获取实际设备名称
         let actual_name = device.tun_name().unwrap_or_else(|_| name.to_string());
 
         let mtu_val = mtu.unwrap_or(1500);
         
+        // 创建TUN设备共享实例
+        let device_arc = Arc::new(Mutex::new(device));
+        
+        // 创建写入线程的通道
+        let (tx, rx) = mpsc::channel::<WriteTask>();
+        let rx = Arc::new(Mutex::new(rx));
+        
+        // 创建4个写入工作线程
+        let worker_count = 4;
+        for id in 0..worker_count {
+            let device_clone = device_arc.clone();
+            let rx_clone = rx.clone();
+            
+            // 启动工作线程
+            thread::spawn(move || {
+                MacTun::writer_thread(id, device_clone, rx_clone);
+            });
+        }
+        
+        println!("✅ TUN设备写入线程池已启动，共 {} 个工作线程", worker_count);
+        
         // 创建MacTun实例
         let mac_tun = Self {
-            device: Arc::new(TokioMutex::new(device)),
+            device: device_arc,
             name: actual_name,
             address,
             address_v6,
@@ -133,6 +165,7 @@ impl MacTun {
             original_routes,
             buffer_pool: Arc::new(Mutex::new(VecDeque::new())),
             mtu: mtu_val,
+            writer_tx: tx,
         };
 
         // 配置路由
@@ -153,6 +186,61 @@ impl MacTun {
         }
         
         Ok(mac_tun)
+    }
+    
+    // 写入工作线程函数
+    fn writer_thread(
+        id: u32,
+        device: Arc<Mutex<tun::Device>>,
+        rx: Arc<Mutex<mpsc::Receiver<WriteTask>>>,
+    ) {
+        println!("🧵 TUN写入工作线程 #{} 已启动", id);
+        
+        // 持续处理写入任务
+        while let Ok(rx_guard) = rx.lock() {
+            match rx_guard.recv() {
+                Ok(task) => {
+                    // 释放锁
+                    drop(rx_guard);
+                    
+                    // 计算任务在队列中等待的时间
+                    let queue_time = task.created_time.elapsed();
+                    
+                    // 开始写入任务计时
+                    let write_start = Instant::now();
+                    
+                    // 同步写入数据到TUN设备
+                    let write_result = {
+                        let mut device_guard = device.lock().unwrap();
+                        device_guard.write(&task.data)
+                    };
+                    
+                    // 计算写入耗时
+                    let write_time = write_start.elapsed();
+                    
+                    // 处理写入结果
+                    match write_result {
+                        Ok(n) => {
+                            println!("✅ 线程#{}: TUN写入成功: {} 字节, 队列耗时: {:?}, 写入耗时: {:?}", 
+                                     id, n, queue_time, write_time);
+                            if n != task.len {
+                                println!("⚠️ 线程#{}: 警告: 写入字节数({})与请求字节数({})不一致", 
+                                         id, n, task.len);
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("❌ 线程#{}: TUN写入失败: {}, 队列耗时: {:?}, 写入耗时: {:?}", 
+                                      id, e, queue_time, write_time);
+                        }
+                    }
+                },
+                Err(_) => {
+                    break;
+                }
+            }
+        }
+        
+        println!("🧵 TUN写入工作线程 #{} 已终止", id);
     }
 
     /// 执行路由命令并处理结果
@@ -255,10 +343,10 @@ impl Tun for MacTun {
         
         // 从设备读取数据
         let read_result = {
-            let runtime = tokio::runtime::Handle::current();
             // 获取设备引用并保持足够长
-            let mut device_guard = self.device.blocking_lock();
-            runtime.block_on(device_guard.read(&mut buffer))
+            let mut device_guard = self.device.lock().unwrap();
+            // 使用Read trait的方法读取数据
+            device_guard.read(&mut buffer)
         };
         
         match read_result {
@@ -351,7 +439,8 @@ impl Tun for MacTun {
         println!("🍓MACTUN: 发送数据包，长度: {}", len);
         
         let (signature, data) = buf.into_parts();
-        println!("🍓MACTUN: 发送数据包，签名是: {:?}, data长度: {},data内容: {:02x?}", signature, data.len(), data);
+        println!("🍓MACTUN: 发送数据包，签名是: {:?}, data长度: {}", signature, data.len());
+        
         // 添加额外日志，分析IP包内容
         if len >= 20 {  // IP包头至少20字节
             let version = data[0] >> 4;
@@ -385,27 +474,65 @@ impl Tun for MacTun {
             }
         }
         
-        // 获取临时数据的副本
+        // 计算发送前的数据哈希以便跟踪
+        let mut send_hash: u32 = 0;
+        for i in 0..len {
+            send_hash = send_hash.wrapping_add(data[i] as u32);
+        }
+        println!("🔢 发送前数据哈希: {}, 长度: {}", send_hash, len);
+        
+        // 获取数据的副本
         let data_to_send = data[..len].to_vec();
         
-        // 先释放原始缓冲区，避免在异步任务中使用原始指针
+        // 创建写入任务
+        let write_task = WriteTask {
+            data: data_to_send,
+            len,
+            created_time: Instant::now(),
+        };
+        
+        // 将任务发送到写入线程池
+        println!("📤 通过线程池发送数据到TUN设备");
+        match self.writer_tx.send(write_task) {
+            Ok(_) => println!("✅ 发送任务已加入线程池队列"),
+            Err(e) => eprintln!("❌ 无法发送任务到线程池: {}", e),
+        }
+        
+        // 释放原始缓冲区前检查缓冲区内容
+        println!("🔍 释放前检查缓冲区: 签名={:?}", signature);
+        if !signature[0].is_null() {
+            unsafe {
+                let data_ptr = signature[0] as *mut Vec<u8>;
+                println!("🔍 缓冲区指针有效，即将释放: {:p}", data_ptr);
+                
+                // 如果可以，检查Vec的内容
+                if !data_ptr.is_null() && (*data_ptr).len() > 0 {
+                    println!("🔍 缓冲区内容长度: {}", (*data_ptr).len());
+                    if (*data_ptr).len() <= 64 {
+                        println!("🔍 缓冲区内容: {:02x?}", &*data_ptr);
+                    } else {
+                        println!("🔍 缓冲区前64字节: {:02x?}", &(*data_ptr)[..64]);
+                    }
+                } else {
+                    println!("🔍 缓冲区内容为空或无法访问");
+                }
+            }
+        } else {
+            println!("🔍 缓冲区指针为空，无法检查");
+        }
+        
+        // 释放原始缓冲区
         unsafe {
             let data_ptr = signature[0] as *mut Vec<u8>;
             if !data_ptr.is_null() {
                 drop(Box::from_raw(data_ptr));
+                println!("✅ 原始缓冲区已释放");
+            } else {
+                println!("⚠️ 原始缓冲区指针为空，无需释放");
             }
         }
         
-        // 使用tokio::spawn来异步处理写入操作
-        let device = self.device.clone();
-        tokio::spawn(async move {
-            let mut device_guard = device.lock().await;
-            if let Err(e) = device_guard.write(&data_to_send).await {
-                eprintln!("写入TUN设备错误: {}", e);
-            } else {
-                info!("TUN: 成功写入MacTun设备 {} 字节, 数据包内容(十六进制): {:02x?}", data_to_send.len(), data_to_send);
-            }
-        });
+        println!("✅ 数据包已提交给线程池处理");
     }
     
     fn return_tx_buffer(&self, buf: TunBufferToken) {
