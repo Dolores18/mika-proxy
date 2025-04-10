@@ -139,9 +139,36 @@ impl<'d> smoltcp::phy::TxToken for TxToken<'d> {
                              &buffer.data[..std::cmp::min(len, 64)]);
                 }
                 
-                // 发送数据到TUN设备
-                self.1.send(buffer, len);
-                println!("✅数据已发送到TUN设备");
+                // 发送数据到TUN设备，添加重试机制
+                const MAX_RETRIES: usize = 3;
+                let mut retry_count = 0;
+                loop {
+                    match self.1.send(buffer.clone(), len) {
+                        Ok(_) => {
+                            println!("✅数据已成功发送到TUN设备");
+                            break;
+                        },
+                        Err(e) => {
+                            if e.kind() == std::io::ErrorKind::Interrupted && retry_count < MAX_RETRIES {
+                                retry_count += 1;
+                                println!("⚠️ 发送被中断，正在进行第{}次重试", retry_count);
+                                continue;
+                            } else if e.kind() == std::io::ErrorKind::WouldBlock && retry_count < MAX_RETRIES {
+                                retry_count += 1;
+                                println!("⚠️ 发送会阻塞，正在进行第{}次重试", retry_count);
+                                // 短暂等待后重试，避免立即重试造成的资源浪费
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                                continue;
+                            } else {
+                                println!("❌ 发送到TUN设备失败: {:?}", e);
+                                if retry_count > 0 {
+                                    println!("❌ 已重试{}次，放弃发送", retry_count);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
             },
             None => {
                 println!("🔴错误: 尝试发送数据时缓冲区为空!");

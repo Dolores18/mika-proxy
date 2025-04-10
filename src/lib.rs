@@ -881,7 +881,7 @@ pub async fn start_tun1_server(
     // 运行IP栈
     trace!("准备启动 IP 栈任务");
     let ip_stack_task = ip_stack::run(
-        tun_arc,
+        tun_arc.clone(),
         Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>,
         Arc::downgrade(&udp_handler) as Weak<dyn DatagramSessionHandler>
     );
@@ -889,12 +889,19 @@ pub async fn start_tun1_server(
     trace!("IP 栈任务已启动，任务句柄: {:?}", ip_stack_task);
     info!("TUN服务器启动完成");
     
-    // 不要等待IP栈任务完成，而是让程序保持运行
+    // 等待IP栈任务完成，而不是仅等待中断信号
     println!("TUN服务器正在运行 - 按Ctrl+C退出");
     
-    // 等待中断信号
-    tokio::signal::ctrl_c().await?;
-    println!("收到中断信号，正在关闭TUN服务器...");
+    // 使用tokio::select同时等待IP栈任务完成和Ctrl+C信号
+    tokio::select! {
+        _ = ip_stack_task => {
+            println!("IP栈任务已结束");
+        }
+        _ = tokio::signal::ctrl_c() => {
+            println!("收到中断信号，正在关闭TUN服务器...");
+        }
+    }
     
+    info!("TUN服务器已关闭");
     Ok(())
 }

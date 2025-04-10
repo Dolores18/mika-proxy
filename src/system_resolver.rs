@@ -18,7 +18,7 @@ impl SystemResolver {
 #[async_trait]
 impl Resolver for SystemResolver {
     async fn resolve_ipv4(&self, domain: String) -> ResolveResultV4 {
-        println!("使用系统解析器处理doh服务器域名: {}", domain);
+        println!("使用系统解析器处理服务器域名: {}", domain);
         let ips = lookup_host(domain.clone() + ":0").await?;
         let records = ips
             .filter_map(|saddr| match saddr.ip() {

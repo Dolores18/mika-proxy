@@ -66,6 +66,7 @@ impl MultiplexedDatagramSession for IpStackDatagramSession {
 
                 //let src_ip: Ipv4Address = (*src_ip).into();
                 println!("🌹udp客户端测试用IPv4 发送数据包: {}", src_ip);
+                println!("🌹本地端口是: {}", self.local_endpoint.port());
                 //let src_ip: Ipv4Address = Ipv4Addr::new(1, 1, 1, 1).into();
                
                 println!("  准备调用ip_buf.consume");
