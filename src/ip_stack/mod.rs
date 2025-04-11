@@ -233,7 +233,8 @@ pub fn run(
     println!("🍎ip_stack: 启动IP栈");
     tokio::runtime::Handle::current().spawn_blocking(move || {
         while let Some(recv_buf) = tun.blocking_recv() {
-            println!("🍎ip_stack: 收到数据包，长度: {}, 数据包内容(十六进制): {:02x?}", recv_buf.len(), recv_buf);
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+            println!("🍎ip_stack: 收到数据包，时间: {}s {}ms，长度: {}, 数据包内容(十六进制): {:02x?}", now.as_secs(), now.subsec_millis(), recv_buf.len(), recv_buf);
             process_packet(&stack, recv_buf);
         }
     })
@@ -424,7 +425,8 @@ fn process_udp(
     dst_port: u16,
     payload: &mut [u8],
 ) {
-    println!("开始处理UDP包");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    println!("开始处理UDP包，时间: {}s {}ms", now.as_secs(), now.subsec_millis());
     println!("  源地址: {}, 目标地址: {}:{}, 负载长度: {}", src_addr, 
              smoltcp_addr_to_std(dst_addr), dst_port, payload.len());
     
@@ -508,7 +510,10 @@ fn process_udp(
         dest_addr,
         payload_copy,
     )) {
-        Ok(_) => println!("  成功将UDP数据包发送到处理器队列"),
+        Ok(_) => {
+            let end_time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+            println!("  成功将UDP数据包发送到处理器队列，时间: {}s {}ms", end_time.as_secs(), end_time.subsec_millis());
+        },
         Err(TrySendError::Full(_)) => println!("  处理器队列已满，丢弃数据包"),
         Err(TrySendError::Disconnected(_)) => {
             println!("  UDP会话已断开，移除会话");
