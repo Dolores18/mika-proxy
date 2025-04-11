@@ -1,6 +1,7 @@
 use std::pin::Pin;
 use std::sync::Weak;
 use std::task::{ready, Context, Poll};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -18,9 +19,11 @@ use tokio_util::sync::PollSender;
 use crate::host_resolver::dns_packet_parser;
 use crate::flow::*;
 use crate::h2::{FlowAdapterConnector, TokioHyperExecutor};
+use rustls;
 
 pub struct DohDatagramAdapterFactory {
-    client: HyperClient<HttpsConnector<FlowAdapterConnector>, Body>,
+    client_https: HyperClient<HttpsConnector<FlowAdapterConnector>, Body>,
+    client_http: HyperClient<hyper::client::HttpConnector, Body>,
     url: Uri,
 }
 
@@ -34,10 +37,12 @@ enum DohDatagramAdapterTxState {
 
 struct DohDatagramAdapter {
     url: Uri,
-    client: HyperClient<HttpsConnector<FlowAdapterConnector>, Body>,
+    client_https: HyperClient<HttpsConnector<FlowAdapterConnector>, Body>,
+    client_http: HyperClient<hyper::client::HttpConnector, Body>,
     tx_state: DohDatagramAdapterTxState,
     rx_chan: (Option<PollSender<Buffer>>, mpsc::Receiver<Buffer>),
     current_query_id: u16,
+    request_start_time: Option<Instant>,
 }
 
 impl DohDatagramAdapterFactory {
@@ -45,16 +50,18 @@ impl DohDatagramAdapterFactory {
         // 创建自定义连接器
         let flow_connector = FlowAdapterConnector { next };
 
-        // 使用 hyper_rustls 的构建器 API
-        let https = hyper_rustls::HttpsConnectorBuilder::new()
+        let is_https = url.scheme() == Some(&http::uri::Scheme::HTTPS);
+        println!("Creating DoH client for URL: {} (is_https: {})", url, is_https);
+
+        // 创建 HTTPS 客户端
+        let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
             .with_native_roots()
             .expect("failed to load native root certificates")
-            .https_only()
+            .https_or_http() // 允许HTTP连接
             .enable_http2()
-            .wrap_connector(flow_connector);
-
-        // 创建支持 HTTP2 的 hyper client
-        let client = hyper::Client::builder()
+            .wrap_connector(flow_connector.clone());
+        
+        let client_https = hyper::Client::builder()
             .http2_only(false) // 允许回退到 HTTP/1.1
             .http2_keep_alive_interval(std::time::Duration::from_secs(1))
             .http2_keep_alive_timeout(std::time::Duration::from_secs(5))
@@ -64,11 +71,27 @@ impl DohDatagramAdapterFactory {
             .pool_idle_timeout(std::time::Duration::from_secs(30))
             .pool_max_idle_per_host(1)
             .executor(TokioHyperExecutor::new_current())
-            .build::<_, Body>(https);
+            .build::<_, Body>(https_connector);
 
-        //println!("Created DoH client for URL: {}", url);
+        // 创建纯 HTTP 客户端 (用于本地连接)
+        let mut http_connector = hyper::client::HttpConnector::new();
+        http_connector.enforce_http(false);
+        
+        let client_http = hyper::Client::builder()
+            .http2_only(true) // 强制使用 HTTP/2
+            .http2_keep_alive_interval(std::time::Duration::from_secs(1))
+            .http2_keep_alive_timeout(std::time::Duration::from_secs(5))
+            .http2_adaptive_window(true)
+            .retry_canceled_requests(true)
+            .set_host(true)
+            .pool_idle_timeout(std::time::Duration::from_secs(30))
+            .pool_max_idle_per_host(1)
+            .executor(TokioHyperExecutor::new_current())
+            .build::<_, Body>(http_connector);
 
-        Self { client, url }
+        println!("DoH客户端创建完成，支持HTTP和HTTPS，URL: {}", url);
+
+        Self { client_https, client_http, url }
     }
 }
 
@@ -77,11 +100,13 @@ impl DatagramSessionFactory for DohDatagramAdapterFactory {
     async fn bind(&self, _context: Box<FlowContext>) -> FlowResult<Box<dyn DatagramSession>> {
         let (rx_tx, rx_rx) = mpsc::channel(4);
         Ok(Box::new(DohDatagramAdapter {
-            client: self.client.clone(),
+            client_https: self.client_https.clone(),
+            client_http: self.client_http.clone(),
             tx_state: Default::default(),
             rx_chan: (Some(PollSender::new(rx_tx)), rx_rx),
             url: self.url.clone(),
             current_query_id: 0,
+            request_start_time: None,
         }))
     }
 }
@@ -109,6 +134,12 @@ impl DatagramSession for DohDatagramAdapter {
                 DohDatagramAdapterTxState::Idle => break Poll::Ready(()),
                 DohDatagramAdapterTxState::PendingResponse(mut fut) => match fut.poll_unpin(cx) {
                     Poll::Ready(Ok(resp)) => {
+                        // 计算并打印从请求到收到响应头的时间（毫秒）
+                        if let Some(start_time) = self.request_start_time {
+                            let duration = start_time.elapsed();
+                            println!("【计时】从DoH请求到响应头: {}ms", duration.as_millis());
+                        }
+                        
                         println!("Received DoH response with status: {}", resp.status());
                         
                         // 使用成员变量中的查询ID
@@ -131,7 +162,13 @@ impl DatagramSession for DohDatagramAdapter {
                         }
                     }
                     Poll::Ready(Err(e)) => {
-                        println!("Request error: {:?}", e);
+                        // 打印请求错误和已经花费的时间
+                        if let Some(start_time) = self.request_start_time.take() {
+                            let duration = start_time.elapsed();
+                            println!("【计时】请求失败耗时: {}ms, 错误: {:?}", duration.as_millis(), e);
+                        } else {
+                            println!("Request error: {:?}", e);
+                        }
                         self.rx_chan.0 = None;
                     }
                     Poll::Pending => {
@@ -143,6 +180,13 @@ impl DatagramSession for DohDatagramAdapter {
                     let current_buf_len = byte_bufs.iter().map(|c| c.len()).sum();
                     match Pin::new(&mut body).poll_data(cx) {
                         Poll::Ready(None) => {
+                            // 计算并打印从请求到完整接收响应的总时间（毫秒）
+                            if let Some(start_time) = self.request_start_time.take() {
+                                let duration = start_time.elapsed();
+                                println!("【计时】DoH完整请求-响应周期: {}ms，数据大小: {}字节", 
+                                         duration.as_millis(), current_buf_len);
+                            }
+                            
                             let mut buf = Vec::with_capacity(current_buf_len);
                             for b in byte_bufs {
                                 buf.extend_from_slice(&b[..]);
@@ -212,12 +256,19 @@ impl DatagramSession for DohDatagramAdapter {
     }
 
     fn send_to(&mut self, _remote_peer: DestinationAddr, buf: Buffer) {
+        // 记录请求开始时间
+        self.request_start_time = Some(Instant::now());
+        
         info!("Sending DoH request to {}", self.url);
         info!("DNS query packet length: {}", buf.len());
         
         // 检查URL是否为 /resolve 或 /resolver 端点
         let path = self.url.path();
         let is_json_api = path.ends_with("/resolve") || path.ends_with("/resolver");
+        
+        // 判断是否使用HTTPS
+        let is_https = self.url.scheme() == Some(&http::uri::Scheme::HTTPS);
+        println!("使用HTTPS客户端: {}", is_https);
         
         if is_json_api {
             // 使用新模块解析DNS查询包
@@ -236,13 +287,19 @@ impl DatagramSession for DohDatagramAdapter {
                         .method(Method::GET)
                         .uri(uri)
                         .header(ACCEPT, "application/dns-json")
-                        // 不再使用extension
                         .body(Body::empty())
                         .unwrap();
                     
                     info!("JSON API请求头: {:?}", req.headers());
-                    let fut = self.client.request(req);
-                    self.tx_state = DohDatagramAdapterTxState::PendingResponse(fut);
+                    
+                    // 根据URL类型选择客户端
+                    if is_https {
+                        let fut = self.client_https.request(req);
+                        self.tx_state = DohDatagramAdapterTxState::PendingResponse(fut);
+                    } else {
+                        let fut = self.client_http.request(req);
+                        self.tx_state = DohDatagramAdapterTxState::PendingResponse(fut);
+                    }
                 }
                 None => {
                     println!("无法解析DNS查询包以构建JSON API请求");
@@ -257,8 +314,15 @@ impl DatagramSession for DohDatagramAdapter {
                         .unwrap();
 
                     info!("标准DoH请求头: {:?}", req.headers());
-                    let fut = self.client.request(req);
-                    self.tx_state = DohDatagramAdapterTxState::PendingResponse(fut);
+                    
+                    // 根据URL类型选择客户端
+                    if is_https {
+                        let fut = self.client_https.request(req);
+                        self.tx_state = DohDatagramAdapterTxState::PendingResponse(fut);
+                    } else {
+                        let fut = self.client_http.request(req);
+                        self.tx_state = DohDatagramAdapterTxState::PendingResponse(fut);
+                    }
                 }
             }
         } else {
@@ -277,9 +341,17 @@ impl DatagramSession for DohDatagramAdapter {
                 .body(buf.into())
                 .unwrap();
 
+            println!("发送二进制DoH请求到 {}", self.url);
             info!("Full request headers: {:?}", req.headers());
-            let fut = self.client.request(req);
-            self.tx_state = DohDatagramAdapterTxState::PendingResponse(fut);
+            
+            // 根据URL类型选择客户端
+            if is_https {
+                let fut = self.client_https.request(req);
+                self.tx_state = DohDatagramAdapterTxState::PendingResponse(fut);
+            } else {
+                let fut = self.client_http.request(req);
+                self.tx_state = DohDatagramAdapterTxState::PendingResponse(fut);
+            }
         }
     }
 
