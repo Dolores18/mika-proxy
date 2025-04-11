@@ -2,8 +2,11 @@
 [servers]
 # 可以添加多个服务器地址
 addresses = [
-    "107.174.218.153:1080", 
-    "2401:b60:16:db:::1080"
+      "47.79.39.75:1080",
+     "2401:b60:16:db:::1080",
+    "107.174.218.153:1080"
+   
+  
 ]
 
 # DNS 解析配置
@@ -13,7 +16,8 @@ china_doh = "https://1.12.12.12/dns-query"
 # 国际 DoH 服务器
 global_doh = "https://1.1.1.1/dns-query"
 # 通用DoH服务器
-doh ="http://127.0.0.1:5353/dns-query"
+doh ="https://94.140.14.14/resolve"
+
 # 备用DoH服务器
 adg = "https://94.140.14.14/resolve"
 
@@ -33,22 +37,58 @@ udp_listen_addr_v6 = "[::]:1083"
 # GeoIP数据库路径
 geoip_db_path = "GeoLite2-Country.mmdb"
 
-# 直连域名列表
+# 域名分流规则
 [domains]
+
+# 直连域名列表
+# #direct
 direct = [
+    # 百度相关
     "baidu.com",
-    "qq.com",
-    "bilibili.com",
     "bdimg.com",
     "bdstatic.com",
-    "hdslb.com",
     "baidubce.com",
     "bcebos.com",
+    
+    # B站相关
+    "bilibili.com",
+    "hdslb.com",
     "bilivideo.com",
+    "bilivideo.cn", 
     "biliapi.net",
-    "bili",
+    "acg.tv",
+    "acgvideo.com",
+    "b23.tv",
+    "bigfun.cn",
+    "bigfunapp.cn",
+    "biliapi.com",
+    "biligame.com",
+    "biligame.net",
+    "im9.com",
+    "smtcdns.net",
+    
+    # 其他中国网站
+    "qq.com",
     "zhihu.com",
-    "zhimg.com",
-    "bilivideo.cn",
-    "biliapi.net"
+    "zhimg.com"
+]
+
+# 代理域名列表
+# #proxy
+proxy = [
+    # 谷歌相关
+    "google.com",
+    "google-analytics.com",
+    "googleapis.com",
+    "gstatic.com",
+    "doubleclick.net",
+    "www.google-analytics.com",
+    "www.googleapis.com",
+    "www.gstatic.com",
+    "www.doubleclick.net",
+    "beacons.gcp.gvt2.com",
+
+    #linux.do相关
+    "linux.do"
+
 ] 

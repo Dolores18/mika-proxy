@@ -1,4 +1,4 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
@@ -22,22 +22,47 @@ struct AsyncMatchContext {
     dst_domain: String,
     dst_port: Option<u16>,
     resolver: Arc<dyn Resolver>,
+    // 缓存解析结果
+    resolved_ipv4: Option<Ipv4Addr>,
+    resolved_ipv6: Option<Ipv6Addr>,
 }
 
 impl AsyncMatchContext {
-    async fn try_match<'m>(&self, me: &'m RuleDispatcher) -> FlowResult<&'m Action> {
+    async fn try_match<'m>(&mut self, me: &'m RuleDispatcher) -> FlowResult<&'m Action> {
+        // 首先解析域名为IP地址，供规则匹配使用
+        
         let (v4_res, v6_res) = join(
             self.resolver.resolve_ipv4(self.dst_domain.clone()),
             self.resolver.resolve_ipv6(self.dst_domain.clone()),
         )
         .await;
+        
+        
+        // 保存解析结果到缓存
+        if let Ok(ips) = &v4_res {
+            if !ips.is_empty() {
+                self.resolved_ipv4 = Some(ips[0]);
+                println!("🔄 成功解析IPv4地址用于规则匹配: {} -> {}", self.dst_domain, ips[0]);
+            }
+        }
+        
+        if let Ok(ips) = &v6_res {
+            if !ips.is_empty() {
+                self.resolved_ipv6 = Some(ips[0]);
+            }
+        }
+        
         let dst_ip_v4 = v4_res.unwrap_or_default().first().copied();
         let dst_ip_v6 = v6_res.unwrap_or_default().first().copied();
         let dst_domain = Some(self.dst_domain.as_str());
+        
+        // 使用解析结果以及原始域名进行规则匹配
         let res = me
             .rule_set
             .r#match(self.src, dst_ip_v4, dst_ip_v6, dst_domain, self.dst_port)
             .map(|id| me.actions.get(id.0 as usize));
+            
+        // 返回匹配的Action
         match res {
             Some(Some(a)) => Ok(a),
             Some(None) => Err(FlowError::NoOutbound),
@@ -63,7 +88,6 @@ impl RuleDispatcher {
             (HostName::DomainName(domain), Some(resolver))
                 if self.rule_set.should_resolve(src, domain, dst_port) =>
             {
-                println!("🔍 域名需要解析: {}", domain);
                 let Some(resolver) = resolver.upgrade() else {
                     return TryMatchResult::Err(FlowError::NoOutbound);
                 };
@@ -72,6 +96,8 @@ impl RuleDispatcher {
                     dst_domain: domain.clone(),
                     dst_port,
                     resolver,
+                    resolved_ipv4: None,
+                    resolved_ipv6: None,
                 });
             }
             (HostName::DomainName(domain), _) => {
@@ -125,24 +151,46 @@ impl RuleDispatcher {
     }
     fn try_match_with(
         &self,
-        context: Box<FlowContext>,
+        mut context: Box<FlowContext>,
         cb: impl FnOnce(Box<FlowContext>, &Action) + Send + 'static,
     ) {
         match self.try_match(&context) {
-            TryMatchResult::Matched(a) => cb(context, a),
-            TryMatchResult::NeedAsync(a) => {
+            TryMatchResult::Matched(a) => {
+                cb(context, a)
+            },
+            TryMatchResult::NeedAsync(mut async_ctx) => {
                 let me = self.me.upgrade().unwrap();
+                
                 tokio::spawn(async move {
-                    match a.try_match(&me).await {
-                        Ok(a) => cb(context, a),
-                        Err(_) => {
+                    // 执行规则匹配并获取适当的Action
+                    match async_ctx.try_match(&me).await {
+                        Ok(a) => {
+                            
+                            // 在这里，如果源是域名，将其替换为已缓存的IP
+                            if let HostName::DomainName(_) = context.remote_peer.host {
+                                
+                                // 优先使用IPv4地址
+                                if let Some(ipv4) = async_ctx.resolved_ipv4 {
+                                    // 替换context中的域名为IP
+                                    context.remote_peer.host = HostName::Ip(IpAddr::V4(ipv4));
+                                } else if let Some(ipv6) = async_ctx.resolved_ipv6 {
+                                    println!("🔄 使用缓存的解析结果更新Context: {} -> {}", async_ctx.dst_domain, ipv6);
+                                    // 替换context中的域名为IP
+                                    context.remote_peer.host = HostName::Ip(IpAddr::V6(ipv6));
+                                }
+                            }
+                            
+                            // 调用回调函数
+                            cb(context, a)
+                        },
+                        Err(e) => {
                             // TODO: log error
                             return;
                         }
                     }
                 });
             }
-            TryMatchResult::Err(_e) => {
+            TryMatchResult::Err(e) => {
                 // TODO: log error
                 return;
             }
@@ -153,14 +201,15 @@ impl RuleDispatcher {
             self.resolver.as_ref(),
             self.rule_set.should_resolve(None, domain, None),
         ) {
-            AsyncMatchContext {
+            let mut ctx = AsyncMatchContext {
                 src: None,
                 dst_domain: domain.into(),
                 dst_port: None,
                 resolver: resolver.upgrade().ok_or(FlowError::NoOutbound)?,
-            }
-            .try_match(self)
-            .await
+                resolved_ipv4: None,
+                resolved_ipv6: None,
+            };
+            ctx.try_match(self).await
         } else {
             let res = self
                 .rule_set
@@ -194,7 +243,7 @@ impl Resolver for RuleDispatcher {
     }
     async fn resolve_ipv6(&self, domain: String) -> ResolveResultV6 {
         let action = self.match_domain(&domain).await?;
-        let resolver = action.resolver.upgrade().ok_or(FlowError::NoOutbound)?;
+        let resolver = action.resolver.upgrade().ok_or(FlowError::NoOutbound)?;        println!("📣 [RuleDispatcher::resolve_ipv6] 将解析请求委托给匹配的规则解析器: {}", domain);
         resolver.resolve_ipv6(domain).await
     }
 }

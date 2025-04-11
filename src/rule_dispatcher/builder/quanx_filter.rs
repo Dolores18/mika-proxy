@@ -64,13 +64,17 @@ fn push_id_range_handle_into_sorted(
     idx: usize,
     handle: RuleHandle,
 ) {
+    println!("🔍 规则ID分配: #{} -> 动作ID: {}", handle.rule_id(), handle.action().0);
+    
     if let Some((idx_range, _)) = ranges
         .last_mut()
         .filter(|(_, last)| last.action() == handle.action())
     {
         *idx_range = idx_range.start..idx_range.end.max(idx + 1);
+        println!("  - 规则合并: 范围扩展为 {}..{}", idx_range.start, idx_range.end);
         return;
     }
+    println!("  - 新规则范围: {}..{}", idx, idx + 1);
     ranges.push((idx..idx + 1, handle));
 }
 
@@ -80,22 +84,37 @@ fn build_ac_from_line_segs<'s, S: Iterator<Item = &'s str>>(
     action_map: &BTreeMap<&str, ActionHandle>,
     rule_ranges: &mut Vec<IdRangeHandle>,
 ) -> Option<AhoCorasick> {
+    println!("📋 开始构建域名规则集 (类型: {:?})", accepted_rule_types);
+    
     let patterns: Vec<_> = lines
         .filter_map(|(id, mut segs)| {
             let rule_type = segs.next()?;
-            accepted_rule_types
+            let matches = accepted_rule_types
                 .iter()
-                .any(|r| rule_type.eq_ignore_ascii_case(r))
-                .then_some((id, segs))
+                .any(|r| rule_type.eq_ignore_ascii_case(r));
+            
+            if matches {
+                println!("✓ 规则类型匹配: {} (ID: {})", rule_type, id);
+            }
+            
+            matches.then_some((id, segs))
         })
-        .filter_map(|(id, segs)| Some((id, QuanxDomainRule::parse_line(segs, action_map)?)))
+        .filter_map(|(id, segs)| {
+            let rule = QuanxDomainRule::parse_line(segs, action_map)?;
+            let domain_str = String::from_utf8_lossy(&rule.domain);
+            println!("  域名: {}, 动作: {:?}", domain_str, rule.action);
+            Some((id, rule))
+        })
         .enumerate()
         .map(|(ac_id, (rule_id, QuanxDomainRule { domain, action }))| {
+            let domain_str = String::from_utf8_lossy(&domain);
+            println!("  创建规则: {} -> rule_id={}, action={:?}", domain_str, rule_id, action);
             push_id_range_handle_into_sorted(rule_ranges, ac_id, RuleHandle::new(action, rule_id));
             domain
         })
         .collect();
 
+    println!("✅ 构建完成，共 {} 条规则", patterns.len());
     Some(AhoCorasick::new_auto_configured(&patterns))
 }
 

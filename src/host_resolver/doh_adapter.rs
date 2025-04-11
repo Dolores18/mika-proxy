@@ -268,7 +268,6 @@ impl DatagramSession for DohDatagramAdapter {
         
         // 判断是否使用HTTPS
         let is_https = self.url.scheme() == Some(&http::uri::Scheme::HTTPS);
-        println!("使用HTTPS客户端: {}", is_https);
         
         if is_json_api {
             // 使用新模块解析DNS查询包
@@ -302,7 +301,6 @@ impl DatagramSession for DohDatagramAdapter {
                     }
                 }
                 None => {
-                    println!("无法解析DNS查询包以构建JSON API请求");
                     // 如果无法解析，回退到标准DoH请求
                     let req = Request::builder()
                         .method(Method::POST)
@@ -341,7 +339,6 @@ impl DatagramSession for DohDatagramAdapter {
                 .body(buf.into())
                 .unwrap();
 
-            println!("发送二进制DoH请求到 {}", self.url);
             info!("Full request headers: {:?}", req.headers());
             
             // 根据URL类型选择客户端

@@ -47,9 +47,20 @@ impl RuleSet {
             self.first_resolving_rule_id,
             reduce_rules(self.match_domain_impl(dst_domain).chain(self.r#final)),
         ) {
-            (None, _) => false,
-            (Some(_), None) => true,
-            (Some(first_resolving_id), Some(rule)) => rule.rule_id() >= first_resolving_id,
+            (None, _) => {
+                println!("🚫 不需要解析域名 - 没有设置first_resolving_rule_id");
+                false
+            }
+            (Some(_), None) => {
+                println!("✅ 需要解析域名 - 没有找到匹配的域名规则");
+                true
+            }
+            (Some(first_resolving_id), Some(rule)) => {
+                let need_resolve = rule.rule_id() >= first_resolving_id;
+                println!("域名规则ID: {}，解析临界ID: {}, 需要解析: {}", 
+                    rule.rule_id(), first_resolving_id, need_resolve);
+                need_resolve
+            }
         }
     }
     pub fn r#match(

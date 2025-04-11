@@ -32,11 +32,22 @@ fn handle_context(
             return on_context(context);
         }
     };
+    
+    println!("📣 [handle_context] 准备解析域名: {}", domain);
+    
     let resolver = match resolver.upgrade() {
-        Some(resolver) => resolver,
-        None => return,
+        Some(resolver) => {
+            println!("📣 [handle_context] 解析器获取成功，将进行解析: {}", domain);
+            resolver
+        },
+        None => {
+            println!("❌ [handle_context] 无法获取解析器，无法解析: {}", domain);
+            return;
+        }
     };
+    
     tokio::spawn(async move {
+        println!("📣 [handle_context] 开始异步解析域名: {}", domain);
         let original_dest = context.remote_peer.clone();
         context.remote_peer = super::try_resolve_forward(
             context.local_peer.is_ipv6(),
@@ -50,6 +61,7 @@ fn handle_context(
             println!("🔄 域名替换完成: {} -> {}", domain, ip);
         }
         
+        println!("📣 [handle_context] 解析完成，调用回调函数");
         on_context(context);
         FlowResult::Ok(())
     });
@@ -57,6 +69,12 @@ fn handle_context(
 
 impl StreamHandler for StreamForwardResolver {
     fn on_stream(&self, lower: Box<dyn Stream>, initial_data: Buffer, context: Box<FlowContext>) {
+        if let HostName::DomainName(ref domain) = context.remote_peer.host {
+            println!("📣 [StreamForwardResolver::on_stream] 收到域名连接请求: {}", domain);
+        } else if let HostName::Ip(ref ip) = context.remote_peer.host {
+            println!("📣 [StreamForwardResolver::on_stream] 收到IP连接请求: {}", ip);
+        }
+        
         let next = match self.next.upgrade() {
             Some(next) => next,
             None => return,
