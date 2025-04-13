@@ -84,7 +84,7 @@ where
         initial_data: &'_ [u8],
     ) -> FlowResult<(Box<dyn Stream>, Buffer)> {
         let outbound_factory = self.next.upgrade().ok_or(FlowError::NoOutbound)?;
-        println!("🌹tcp客户端ss工厂进行处理");
+        println!("🌹tcp客户端ss工厂进行处理,初始数据是：{:0x?}", initial_data);
         let ((next, initial_res), tx_crypto) = {
             let (tx_buffer, tx_crypto) = self.get_req(context, initial_data);
 

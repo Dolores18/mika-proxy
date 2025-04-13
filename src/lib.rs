@@ -812,21 +812,20 @@ pub async fn start_tun1_server(
     tun_name: &str,
     tun_ip: Ipv4Addr,
     tun_netmask: Ipv4Addr,
-    mtu: Option<usize>,
+    mtu: Option<u16>,
     server_config: ServerConfig,
     app_config: config::AppConfig,
-) -> Result<(), Box<dyn std::error::Error>> {
+    runtime: tokio::runtime::Runtime,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("开始初始化 TUN 服务器");
+    
     // 创建系统解析器
     let system_resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
-    // 初始化MacTun设备
-    info!("初始化MacTun设备: {}", tun_name);
-    let tun = MacTun::new(tun_name, tun_ip, tun_netmask, mtu)?;
-    let tun_arc = Arc::new(tun);
     
-    info!("TUN设备已创建: {}", tun_arc.get_name());
-    info!("TUN设备IP地址: {}", tun_arc.get_address());
-       // 修改代理地址创建方式
+    // 统计对象
+    let stat = forward::StatHandle::default();
+    
+    // 修改代理地址创建方式
     let server_config_clone = Arc::new(server_config.clone());
     let proxy_addr = server_config_clone.create_fixed_adrr();
 
@@ -835,73 +834,85 @@ pub async fn start_tun1_server(
     let key = BASE64.decode(psd).expect("Failed to decode");
     let key: [u8; 16] = key.try_into().expect("Invalid key length");   
     
-    let socket_outbound_factory2 = Arc::new(SocketOutboundFactory {
-        resolver: Arc::downgrade(&system_resolver),
-        bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
-        bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
-    });
-    log::debug!("Created system resolver and DoH resolver");
-
-    // 统计对象
-    let stat = forward::StatHandle::default();
-    
-  
-    // 创建重定向工厂
-    let redirect_factory = Arc::new(StreamRedirectOutboundFactory {
-        remote_peer: proxy_addr.clone(),
-        next: Arc::downgrade(&socket_outbound_factory2) as Weak<dyn StreamOutboundFactory>,
-    });
-
-    let ss_factory = Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
-        key,
-        Arc::downgrade(&redirect_factory) as Weak<dyn StreamOutboundFactory>,
-    ));
-    // 创建 StreamForwardHandler 实例，
-    let tcp_handler = Arc::new(forward::StreamForwardHandler {
-        outbound: Arc::downgrade(&socket_outbound_factory2) as Weak<dyn StreamOutboundFactory>,
-        request_timeout: 10000,
-        stat: stat,
-    });
-
-    // 创建统计对象
-    let stat = forward::StatHandle::default();
-
-    // 创建 UDP 出站工厂
+    // 创建socket出站工厂
     let socket_outbound_factory = Arc::new(SocketOutboundFactory {
         resolver: Arc::downgrade(&system_resolver),
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
-    // 创建 UDP 转发处理器
-    let udp_handler = Arc::new(forward::DatagramForwardHandler {
-        outbound: Arc::downgrade(&socket_outbound_factory) as Weak<dyn DatagramSessionFactory>,
-        stat: stat,
+    /*
+    // 创建重定向工厂
+    let redirect_factory = Arc::new(StreamRedirectOutboundFactory {
+        remote_peer: proxy_addr.clone(),
+        next: Arc::downgrade(&socket_outbound_factory) as Weak<dyn StreamOutboundFactory>,
     });
+
+    // 创建SS工厂
+    let ss_factory = Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
+        key,
+        Arc::downgrade(&redirect_factory) as Weak<dyn StreamOutboundFactory>,
+    ));
+     */
+    // 创建 StreamForwardHandler 实例
+    let tcp_handler = Arc::new(forward::StreamForwardHandler {
+        outbound: Arc::downgrade(&socket_outbound_factory) as Weak<dyn StreamOutboundFactory>,
+        request_timeout: 10000,
+        stat: stat.clone(),
+    });
+
+    // 创建TUN配置
+    let gateway_str = tun_ip.to_string();
+    let netmask_str = tun_netmask.to_string();
+
+    // 不设置任何路由监控
+    let routes = None;
+    info!("TUN设备已创建，但不监控任何路由");
     
-    // 运行IP栈
-    trace!("准备启动 IP 栈任务");
-    let ip_stack_task = ip_stack::run(
-        tun_arc.clone(),
-        Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>,
-        Arc::downgrade(&udp_handler) as Weak<dyn DatagramSessionHandler>
+    // 创建TUN配置对象
+    let mut tun_config = crate::tun::routes::macos::Tunconfig::new(
+        tun_name.to_string(), 
+        routes,
+        mtu,
+        Some(netmask_str),
+        gateway_str
     );
     
-    trace!("IP 栈任务已启动，任务句柄: {:?}", ip_stack_task);
-    info!("TUN服务器启动完成");
+    // 设置启用TUN
+    tun_config.enabled = true;
     
-    // 等待IP栈任务完成，而不是仅等待中断信号
-    println!("TUN服务器正在运行 - 按Ctrl+C退出");
+    // 设置stream_handler
+    tun_config = tun_config.with_stream_handler(Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>);
     
-    // 使用tokio::select同时等待IP栈任务完成和Ctrl+C信号
-    tokio::select! {
-        _ = ip_stack_task => {
-            println!("IP栈任务已结束");
-        }
-        _ = tokio::signal::ctrl_c() => {
-            println!("收到中断信号，正在关闭TUN服务器...");
+    info!("TUN配置已创建: {:?}", tun_config);
+    
+    // 获取TUN运行器
+    match crate::tun::inbound::get_runner(tun_config) {
+        Ok(Some(runner)) => {
+            info!("TUN服务器已启动");
+            println!("TUN服务器正在运行 - 按Ctrl+C退出");
+            
+            // 运行TUN服务并等待中断信号
+            tokio::select! {
+                result = runner => {
+                    if let Err(e) = result {
+                        error!("TUN服务器运行时错误: {}", e);
+                    }
+                },
+                _ = tokio::signal::ctrl_c() => {
+                    println!("收到中断信号，正在关闭TUN服务器...");
+                }
+            }
+            
+            info!("TUN服务器已关闭");
+            Ok(())
+        },
+        Ok(None) => {
+            error!("TUN服务器未启用");
+            Err("TUN服务器未启用".into())
+        },
+        Err(e) => {
+            error!("TUN服务器启动失败: {}", e);
+            Err(e)
         }
     }
-    
-    info!("TUN服务器已关闭");
-    Ok(())
 }

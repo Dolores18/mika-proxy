@@ -1,0 +1,205 @@
+use tun::AbstractDevice;
+use netstack_smoltcp::StackBuilder;
+use futures::{sink::SinkExt, stream::StreamExt};
+use log::{info, error};
+use std::error::Error as StdError;
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+    error::Error,
+    result::Result,
+};
+
+use crate::flow::{
+    StreamHandler, Buffer,
+};
+use crate::tun::routes::macos::Tunconfig;
+use crate::tun::routes::macos::add_route;
+// 使用crate路径导入我们的tcpstream模块
+use crate::tun::stream::{TunStreamFactory, TunStreamAdapter};
+
+// 添加路由
+fn maybe_add_routes(routes: Option<Vec<String>>, tun_name: &str) {
+    if let Some(routes) = routes {
+        for route in routes {
+            match add_route(tun_name, &route) {
+                Ok(_) => info!("成功添加路由: {} 到 {}", route, tun_name),
+                Err(e) => error!("添加路由失败: {} 到 {}: {}", route, tun_name, e),
+            }
+        }
+    }
+}
+
+async fn handle_inbound_stream(
+    mut stream: netstack_smoltcp::TcpStream,
+    local_addr: SocketAddr, 
+    remote_addr: SocketAddr,
+    stream_handler: Option<Arc<dyn StreamHandler>>, 
+) {
+    if let Some(handler) = stream_handler {
+        // 创建流上下文
+        let dest_addr = crate::flow::DestinationAddr {
+            host: crate::flow::HostName::Ip(remote_addr.ip()),
+            port: remote_addr.port(),
+        };
+        let context = Box::new(crate::flow::FlowContext::new(local_addr, dest_addr));
+        
+        info!("处理来自 {}:{} 的入站连接", remote_addr.ip(), remote_addr.port());
+        
+        // 预先读取一些数据确保流状态正确初始化
+        let mut init_buf = vec![0u8; 4096];
+        let read_bytes = match tokio::io::AsyncReadExt::read(&mut stream, &mut init_buf).await {
+            Ok(n) => n,
+            Err(e) => {
+                error!("从流中预读数据失败: {}", e);
+                return;
+            }
+        };
+        
+        // 调整缓冲区大小为实际读取的字节数
+        init_buf.truncate(read_bytes);
+        
+        // 使用工厂创建适配器
+        let factory = TunStreamFactory::new(handler.clone());
+        let mut adapter = factory.create_adapter_from_netstack(stream, local_addr, remote_addr).await;
+        
+        // 如果预读到了数据，需要将数据传递给处理器
+        if read_bytes > 0 && !init_buf.is_empty() {
+            // 将预读的数据封装到Buffer中
+            let pre_buffer = crate::flow::Buffer::from(init_buf);
+            
+            // 处理连接时传入预读的数据
+            if let Some(flow) = adapter.take_stream() {
+                handler.on_stream(flow, pre_buffer, context);
+                return;
+            }
+        }
+        
+        // 如果没有预读到数据或无法获取流，使用原来的处理方式
+        factory.handle_connection(adapter, context);
+    } else {
+        info!("没有配置stream_handler，连接将被丢弃");
+    }
+}
+
+// 辅助函数，用于错误转换
+fn to_box_err<E>(e: E) -> Box<dyn StdError + Send + Sync>
+where
+    E: StdError + Send + Sync + 'static,
+{
+    Box::new(e)
+}
+
+// 修改 Runner 类型定义
+pub type Runner = futures::future::BoxFuture<'static, Result<(), Box<dyn StdError + Send + Sync>>>;
+
+pub fn get_runner(cfg: Tunconfig) -> Result<Option<Runner>, Box<dyn StdError + Send + Sync>> {
+    if !cfg.enabled {
+        return Ok(None);
+    }
+    
+    // 创建TUN设备
+    let device_name = cfg.tun_name.clone();
+    let mut config = tun::Configuration::default();
+    config.tun_name(&cfg.tun_name);
+    // 设置MTU
+    if let Some(mtu) = cfg.mtu {
+        config.mtu(mtu as u16);
+    }
+    // 设置地址和子网掩码
+    config.address(&cfg.gateway);
+    if let Some(ref netmask) = cfg.netmask {
+        config.netmask(netmask);
+    }
+    config.up();
+    
+    let tun = tun::create_as_async(&config).map_err(to_box_err)?;
+    
+    // 添加路由
+    maybe_add_routes(cfg.routes, &device_name);
+    
+    // 配置网络栈
+    let mut builder = StackBuilder::default()
+        .enable_tcp(true)
+        .enable_udp(true)
+        .enable_icmp(false);
+        
+    let (stack, runner, udp_socket, tcp_listener) = builder.build().unwrap();
+    let udp_socket = udp_socket.unwrap();
+    let tcp_listener = tcp_listener.unwrap();
+    
+    if let Some(runner) = runner {
+        tokio::spawn(runner);
+    }
+    
+    // 获取stream_handler，如果有的话
+    let stream_handler = cfg.stream_handler.and_then(|w| w.upgrade());
+    let stream_handler = stream_handler.clone();
+
+    Ok(Some(Box::pin(async move {
+        let framed = tun.into_framed();
+        let (mut tun_sink, mut tun_stream) = framed.split();
+        let (mut stack_sink, mut stack_stream) = stack.split();
+
+        let mut futs: Vec<Runner> = vec![];
+
+        // 从栈读取数据包并发送到TUN
+        futs.push(Box::pin(async move {
+            while let Some(pkt) = stack_stream.next().await {
+                match pkt {
+                    Ok(pkt) => {
+                        if let Err(e) = tun_sink.send(pkt).await {
+                            error!("发送数据包到TUN失败: {}", e);
+                            return Err(to_box_err(e));
+                        }
+                    }
+                    Err(e) => {
+                        error!("网络栈错误: {}", e);
+                        return Err(to_box_err(e));
+                    }
+                }
+            }
+            Ok(())
+        }));
+
+        // 从TUN读取数据包并发送到栈
+        futs.push(Box::pin(async move {
+            while let Some(pkt) = tun_stream.next().await {
+                match pkt {
+                    Ok(pkt) => {
+                        if let Err(e) = stack_sink.send(pkt).await {
+                            error!("发送数据包到网络栈失败: {}", e);
+                            return Err(to_box_err(e));
+                        }
+                    }
+                    Err(e) => {
+                        error!("TUN错误: {}", e);
+                        return Err(to_box_err(e));
+                    }
+                }
+            }
+            Ok(())
+        }));
+
+        // 处理TCP连接
+        futs.push(Box::pin(async move {
+            let mut tcp_listener = tcp_listener;
+            while let Some((stream, local_addr, remote_addr)) = tcp_listener.next().await {
+                let handler_ref_clone = stream_handler.clone();
+                tokio::spawn( handle_inbound_stream(
+                    stream,
+                    local_addr,
+                    remote_addr,
+                    handler_ref_clone,
+                ));
+            }
+            Ok(())
+        }));
+
+        // 执行所有futures
+        futures::future::select_all(futs).await.0.map_err(|x| {
+            error!("tun error: {}. stopped", x);
+            x
+        })
+    })))
+}

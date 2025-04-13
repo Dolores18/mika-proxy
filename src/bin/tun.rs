@@ -1,12 +1,11 @@
 use std::net::Ipv4Addr;
 use std::str::FromStr;
-use std::path::PathBuf;
 use proxy::{start_tun1_server, ServerConfig};
 use proxy::config::AppConfig;
 use log::{error, info};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 初始化日志
     env_logger::init();
     
@@ -17,13 +16,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // 解析命令行参数
     let args: Vec<String> = std::env::args().collect();
-    let mut tun_name = "utun7".to_string();  // 默认TUN设备名称
+    let tun_name = "utun7".to_string();  // 默认TUN设备名称
     // 使用硬编码的IP地址，更改为172.16.0.1保留地址
     let tun_ip = Ipv4Addr::from_str("172.16.0.1").unwrap();
     let tun_netmask = Ipv4Addr::from_str("255.255.255.0").unwrap();
-    let mut mtu = Some(1500);
-    
-
+    let mtu = Some(1500u16);  // 显式指定类型为u16
     
     // 尝试加载 TOML 配置文件
     let app_config = match AppConfig::load_from_file(config_path.to_str().unwrap()) {
@@ -66,9 +63,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("TUN网络掩码: {}", tun_netmask);
     println!("MTU: {:?}", mtu);
     
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .expect("Failed to create runtime");
     
     // 启动TUN服务器
-    start_tun1_server(&tun_name, tun_ip, tun_netmask, mtu, config, app_config).await?;
+    start_tun1_server(&tun_name, tun_ip, tun_netmask, mtu, config, app_config, runtime).await?;
     
     Ok(())
 } 
