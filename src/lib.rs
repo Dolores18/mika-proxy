@@ -860,6 +860,23 @@ pub async fn start_tun1_server(
         stat: stat.clone(),
     });
 
+
+    let socket_outbound_factory = Arc::new(SocketOutboundFactory {
+        resolver: Arc::downgrade(&system_resolver),
+        bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+        bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
+    });
+
+    // 创建 UDP 转发处理器
+    let datagram_handler = Arc::new(forward::DatagramForwardHandler {
+        outbound: Arc::downgrade(&socket_outbound_factory) as Weak<dyn DatagramSessionFactory>,
+        stat: stat,
+    });
+
+    let tun_handler = Arc::new(TunDatagramHandler::new(
+        Arc::downgrade(&datagram_handler) as Weak<dyn DatagramSessionHandler>,
+    ));
+
     // 创建TUN配置
     let gateway_str = tun_ip.to_string();
     let netmask_str = tun_netmask.to_string();
@@ -882,7 +899,7 @@ pub async fn start_tun1_server(
     
     // 设置stream_handler
     tun_config = tun_config.with_stream_handler(Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>);
-    
+    tun_config = tun_config.with_datagram_handler(Arc::downgrade(&tun_handler) as Weak<dyn DatagramSessionHandler>);
     info!("TUN配置已创建: {:?}", tun_config);
     
     // 获取TUN运行器

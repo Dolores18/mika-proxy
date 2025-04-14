@@ -17,6 +17,52 @@ use crate::tun::routes::macos::Tunconfig;
 use crate::tun::routes::macos::add_route;
 // 使用crate路径导入我们的tcpstream模块
 use crate::tun::stream::{TunStreamFactory, TunStreamAdapter};
+use crate::tun::datagram::{TunDatagramSession, TunDatagramHandler};
+use crate::flow::*;
+use std::net::{Ipv4Addr, Ipv6Addr};
+// 添加处理UDP连接的函数
+async fn handle_inbound_udp(
+    udp_socket: netstack_smoltcp::UdpSocket,
+    datagram_handler: std::sync::Arc<dyn DatagramSessionHandler>,
+) -> Result<(), Box<dyn StdError + Send + Sync>> {
+    info!("创建UDP会话处理器");
+    
+    // 创建初始上下文，使用一个临时地址
+    // 当接收到第一个数据包时，TunDatagramSession会更新这个上下文中的地址
+    let local = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+    
+    // 为会话创建上下文
+    let remote_for_session = DestinationAddr {
+        host: HostName::Ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+        port: 0,
+    };
+    let context_for_session = Box::new(FlowContext::new(local, remote_for_session));
+    
+    // 创建UDP会话，并传入上下文
+    let session = Box::new(TunDatagramSession::new(udp_socket, context_for_session));
+    
+    // 创建新的上下文传递给处理器
+    // 这个上下文稍后会被更新，但指针保持不变
+    let remote_for_handler = DestinationAddr {
+        host: HostName::Ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+        port: 0,
+    };
+    let handler_context = Box::new(FlowContext::new(local, remote_for_handler));
+    
+    // 将会话传递给处理器
+    datagram_handler.on_session(session, handler_context);
+    
+    // 一旦会话被传递给处理器，所有的处理都在后台发生
+    info!("UDP会话处理器已启动");
+    
+    // 不立即返回，而是保持此函数运行，直到程序结束
+    // 创建一个不会完成的future来保持任务活跃
+    let forever = std::future::pending::<()>();
+    forever.await;
+    
+    Ok(())
+}
+
 
 // 添加路由
 fn maybe_add_routes(routes: Option<Vec<String>>, tun_name: &str) {
@@ -136,6 +182,13 @@ pub fn get_runner(cfg: Tunconfig) -> Result<Option<Runner>, Box<dyn StdError + S
     let stream_handler = cfg.stream_handler.and_then(|w| w.upgrade());
     let stream_handler = stream_handler.clone();
 
+    // 获取datagram_handler
+
+    
+    // 创建 TunDatagramHandler 实例
+    let tun_datagram_handler = cfg.datagram_handler.and_then(|w| w.upgrade());
+    let tun_datagram_handler = tun_datagram_handler.clone();
+
     Ok(Some(Box::pin(async move {
         let framed = tun.into_framed();
         let (mut tun_sink, mut tun_stream) = framed.split();
@@ -195,7 +248,19 @@ pub fn get_runner(cfg: Tunconfig) -> Result<Option<Runner>, Box<dyn StdError + S
             }
             Ok(())
         }));
-
+            // 获取datagram_handler
+  
+            // 处理udP连接
+        // 修改 futures 中的调用
+        futs.push(Box::pin(async move {
+            handle_inbound_udp(udp_socket, tun_datagram_handler.expect("UDP处理程序未配置"))
+                .await
+                .map_err(|e| {
+                    error!("UDP处理错误: {}", e);
+                    e
+                })
+        }));
+    
         // 执行所有futures
         futures::future::select_all(futs).await.0.map_err(|x| {
             error!("tun error: {}. stopped", x);

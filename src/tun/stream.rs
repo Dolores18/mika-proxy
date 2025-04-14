@@ -177,6 +177,7 @@ impl Stream for NetstackStreamAdapter {
         // 确保足够大的容量，至少是请求的大小，可能更多
         let required_size = size.get().max(8192);
         tx_buf.reserve(required_size);
+
         
         Poll::Ready(Ok(tx_buf))
     }
@@ -197,29 +198,34 @@ impl Stream for NetstackStreamAdapter {
         
         // 确保存储缓冲区和重置偏移量
         self.tx_buf = Some((buffer, 0));
-        println!("🔍 tunstream commit_tx_buffer: 发送缓冲区已提交, 准备发送");
+        println!("🔍 tunstream commit_tx_buffer: 发送缓冲区已提交, 准备发送, 缓冲区内容: {:0x?}", self.tx_buf);
         
         Ok(())
     }
     
     fn poll_flush_tx(&mut self, cx: &mut Context<'_>) -> Poll<FlowResult<()>> {
-        // 如果没有发送缓冲区，直接返回就绪
         let Some((tx_buf, offset)) = self.tx_buf.as_mut() else {
+            println!("🔍 tunstream poll_flush_tx: 没有待发送的数据");
             return Poll::Ready(Ok(()));
         };
-            
+        
+        println!("🔍 tunstream poll_flush_tx: 开始发送数据, 偏移量: {}, 总长度: {}", *offset, tx_buf.len());
+        
         while *offset < tx_buf.len() {
-            let written = ready!(Pin::new(&mut self.inner).poll_write(cx, &tx_buf[*offset..]))?;
+            let remaining = &tx_buf[*offset..];
+            println!("🔍 tunstream poll_flush_tx: 准备发送 {} 字节数据", remaining.len());
             
-            // 检查是否写入了0字节，这通常表示连接已关闭
-            if written == 0 {
-                return Poll::Ready(Err(FlowError::Eof));
-            }
+            let written = ready!(Pin::new(&mut self.inner).poll_write(cx, remaining))?;
+            println!("🔍 tunstream poll_flush_tx: 成功写入 {} 字节", written);
             
             *offset += written;
+            println!("🔍 tunstream poll_flush_tx: 更新偏移量到 {}", *offset);
         }
         
+        println!("🔍 tunstream poll_flush_tx: 所有数据已发送，执行flush");
         ready!(Pin::new(&mut self.inner).poll_flush(cx))?;
+        println!("🔍 tunstream poll_flush_tx: flush完成");
+        
         Poll::Ready(Ok(()))
     }
 

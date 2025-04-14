@@ -3,7 +3,7 @@ use std::sync::{Arc, Weak};
 use std::io::Error;
 use log::{warn};
 use crate::flow::StreamHandler;
-
+use crate::flow::DatagramSessionHandler;
 #[derive(Debug)]
 pub struct Tunconfig {
     pub enabled: bool,
@@ -13,6 +13,7 @@ pub struct Tunconfig {
     pub netmask: Option<String>,
     pub gateway: String,
     pub stream_handler: Option<Weak<dyn StreamHandler>>,
+    pub datagram_handler: Option<Weak<dyn DatagramSessionHandler>>,
 }
 
 impl Tunconfig {
@@ -25,11 +26,17 @@ impl Tunconfig {
             netmask, 
             gateway,
             stream_handler: None,
+            datagram_handler: None,
         }
     }
     
     pub fn with_stream_handler(mut self, handler: Weak<dyn StreamHandler>) -> Self {
         self.stream_handler = Some(handler);
+        self
+    }
+    
+    pub fn with_datagram_handler(mut self, handler: Weak<dyn DatagramSessionHandler>) -> Self {
+        self.datagram_handler = Some(handler);
         self
     }
 }
