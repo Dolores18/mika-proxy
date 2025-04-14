@@ -62,6 +62,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("TUN设备IP地址: {}", tun_ip);
     println!("TUN网络掩码: {}", tun_netmask);
     println!("MTU: {:?}", mtu);
+    println!("FakeIP: 已启用 (198.18.0.0/16域名映射)");
+    println!("DNS拦截: 已启用");
     
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)

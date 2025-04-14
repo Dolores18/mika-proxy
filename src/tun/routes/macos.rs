@@ -4,6 +4,8 @@ use std::io::Error;
 use log::{warn};
 use crate::flow::StreamHandler;
 use crate::flow::DatagramSessionHandler;
+use crate::fakeip::FakeIp;
+
 #[derive(Debug)]
 pub struct Tunconfig {
     pub enabled: bool,
@@ -14,6 +16,8 @@ pub struct Tunconfig {
     pub gateway: String,
     pub stream_handler: Option<Weak<dyn StreamHandler>>,
     pub datagram_handler: Option<Weak<dyn DatagramSessionHandler>>,
+    pub dns_hijack: bool,
+    pub fakeip: Option<Arc<FakeIp>>,
 }
 
 impl Tunconfig {
@@ -27,6 +31,8 @@ impl Tunconfig {
             gateway,
             stream_handler: None,
             datagram_handler: None,
+            dns_hijack: true,
+            fakeip: None,
         }
     }
     
@@ -37,6 +43,16 @@ impl Tunconfig {
     
     pub fn with_datagram_handler(mut self, handler: Weak<dyn DatagramSessionHandler>) -> Self {
         self.datagram_handler = Some(handler);
+        self
+    }
+
+    pub fn with_dns_hijack(mut self, hijack: bool) -> Self {
+        self.dns_hijack = hijack;
+        self
+    }
+    
+    pub fn with_fakeip(mut self, fakeip: Arc<FakeIp>) -> Self {
+        self.fakeip = Some(fakeip);
         self
     }
 }

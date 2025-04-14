@@ -122,9 +122,8 @@ pub async fn dial_stream(
     let mut tcp_stream = match (context.remote_peer.host.clone(), bind_v4, bind_v6) {
         (HostName::Ip(IpAddr::V4(ip)), Some(bind_v4), _) => {
           
-            let test_ip = Ipv4Addr::new(110,242,68,66 );
-            println!("🌹tcp客户端使用测试IPv4 连接: {}, 连接端口是: {}", test_ip, port);
-            dial_socket_v4(test_ip, port, &bind_v4).await?
+            println!("🌹tcp客户端使用IPv4 连接: {}, 连接端口是: {}", ip, port);
+            dial_socket_v4(ip, port, &bind_v4).await?
         }
         (HostName::Ip(IpAddr::V6(ip)), _, Some(bind_v6)) => {
             println!("🌹tcp客户端使用 IPv6 连接: {}", ip);

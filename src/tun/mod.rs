@@ -17,3 +17,5 @@ pub use routes::macos::Tunconfig;
 pub use inbound::get_runner;
 pub mod datagram;
 pub use datagram::*;
+pub mod exchange_with_resolver;
+pub use exchange_with_resolver::*;

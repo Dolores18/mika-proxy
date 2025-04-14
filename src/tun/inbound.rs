@@ -20,15 +20,18 @@ use crate::tun::stream::{TunStreamFactory, TunStreamAdapter};
 use crate::tun::datagram::{TunDatagramSession, TunDatagramHandler};
 use crate::flow::*;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use crate::fakeip::FakeIp; // 导入FakeIp
 // 添加处理UDP连接的函数
 async fn handle_inbound_udp(
     udp_socket: netstack_smoltcp::UdpSocket,
     datagram_handler: std::sync::Arc<dyn DatagramSessionHandler>,
+    dns_hijack: bool,
+    fakeip: Option<Arc<FakeIp>>, // 添加FakeIp参数
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
     info!("创建UDP会话处理器");
     
     // 创建初始上下文，使用一个临时地址
-    // 当接收到第一个数据包时，TunDatagramSession会更新这个上下文中的地址
+   
     let local = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
     
     // 为会话创建上下文
@@ -39,7 +42,7 @@ async fn handle_inbound_udp(
     let context_for_session = Box::new(FlowContext::new(local, remote_for_session));
     
     // 创建UDP会话，并传入上下文
-    let session = Box::new(TunDatagramSession::new(udp_socket, context_for_session));
+    let session = Box::new(TunDatagramSession::new(udp_socket, context_for_session, dns_hijack, fakeip));
     
     // 创建新的上下文传递给处理器
     // 这个上下文稍后会被更新，但指针保持不变
@@ -183,12 +186,16 @@ pub fn get_runner(cfg: Tunconfig) -> Result<Option<Runner>, Box<dyn StdError + S
     let stream_handler = stream_handler.clone();
 
     // 获取datagram_handler
-
     
     // 创建 TunDatagramHandler 实例
     let tun_datagram_handler = cfg.datagram_handler.and_then(|w| w.upgrade());
     let tun_datagram_handler = tun_datagram_handler.clone();
-
+    //是否拦截dns请求
+    let dns_hijack = cfg.dns_hijack;
+    
+    // 获取FakeIp实例
+    let fakeip = cfg.fakeip.clone();
+    
     Ok(Some(Box::pin(async move {
         let framed = tun.into_framed();
         let (mut tun_sink, mut tun_stream) = framed.split();
@@ -253,7 +260,12 @@ pub fn get_runner(cfg: Tunconfig) -> Result<Option<Runner>, Box<dyn StdError + S
             // 处理udP连接
         // 修改 futures 中的调用
         futs.push(Box::pin(async move {
-            handle_inbound_udp(udp_socket, tun_datagram_handler.expect("UDP处理程序未配置"))
+            handle_inbound_udp(
+                udp_socket, 
+                tun_datagram_handler.expect("UDP处理程序未配置"),
+                dns_hijack,
+                fakeip // 传递FakeIp实例
+            )
                 .await
                 .map_err(|e| {
                     error!("UDP处理错误: {}", e);

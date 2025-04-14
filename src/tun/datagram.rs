@@ -12,6 +12,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::net::Ipv4Addr;
 use std::collections::HashMap;
+use hickory_proto::rr::RecordType;
+use hickory_proto;
+
+// 导入FakeIp和exchange_with_resolver
+use crate::fakeip::FakeIp;
+use crate::tun::exchange_with_resolver::exchange_with_resolver;
+
+//工具函数
+
+
 /// UDP数据包结构
 #[derive(Debug)]
 pub struct UdpPacket {
@@ -32,7 +42,7 @@ pub struct TunDatagramSession {
 }
 
 impl TunDatagramSession {
-    pub fn new(socket: UdpSocket, flow_context: Box<FlowContext>) -> Self {
+    pub fn new(socket: UdpSocket, flow_context: Box<FlowContext>, dns_hijack: bool, resolver: Option<Arc<FakeIp>>) -> Self {
         // 分离socket读写部分
         let (mut lr, mut ls) = socket.split();
         
@@ -63,30 +73,30 @@ impl TunDatagramSession {
         
         // 转发通道句柄
         let ls_handle = dup_ls.clone();
+        // 用于DNS操作的通道句柄
+        let ls_dns = dup_ls.clone();
+        // DNS解析器克隆
+        let resolver_dns = resolver;
         
-        // 创建端口映射表，用于跟踪请求和响应的对应关系
-        let port_mappings = Arc::new(Mutex::new(HashMap::<u16, SocketAddr>::new()));
-        let port_mappings_clone = port_mappings.clone();
-        
+        // dispatcher <-> tun communications
+        // l_tx: dispatcher write packet responsed from remote proxy
+        // l_rx: in fut1 items are forwared to ls
+        let (l_tx, mut l_rx) = tokio::sync::mpsc::channel::<UdpPacket>(32);
+    
+        // forward packets from tun to dispatcher
+        let (d_tx, d_rx) = tokio::sync::mpsc::channel::<UdpPacket>(32);      
         // FakeIP处理点1: 下行数据处理任务
         let ctx_for_tx = flow_context.clone();
         let fut1 = tokio::spawn(async move {
             debug!("UDP下行处理任务已启动");
             while let Some(mut pkt) = tx_receiver.recv().await {
-                // 查找对应的客户端地址
-                let dst_addr = {
-                    let mappings = port_mappings.lock().unwrap();
-                    // 使用源端口作为键来查找对应的客户端地址
-                    if let Some(client_addr) = mappings.get(&pkt.src_addr.port()) {
-                        *client_addr
-                    } else {
-                        // 如果找不到映射，使用原始目标地址
-                        pkt.dst_addr
-                    }
-                };
+                // 直接使用数据包中的目标地址，不再查找映射
+                let dst_addr = pkt.dst_addr;
                 
-                // 设置DNS服务器地址为8.8.8.8:53
-                pkt.src_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53);
+                // 设置DNS服务器地址为1.1.1.1:53（如果需要）
+                if pkt.src_addr.port() == 53 {
+                    pkt.src_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53);
+                }
                 
                 println!("🍎UDP下行数据包(从服务器到客户端): {}→{}, 大小: {}", 
                          pkt.src_addr, dst_addr, pkt.data.len());
@@ -102,6 +112,7 @@ impl TunDatagramSession {
         
         // FakeIP处理点2: 上行数据处理任务
         let ctx_for_rx = flow_context.clone();
+        let rx_sender_clone = rx_sender.clone();
         let fut2 = tokio::spawn(async move {
             debug!("UDP上行处理任务已启动");
             
@@ -122,17 +133,128 @@ impl TunDatagramSession {
                         host: HostName::Ip(dst_addr.ip()),
                         port: dst_addr.port(),
                     };
-                    println!("🍎已更新FlowContext地址信息 - 本地: {:?}, 远程: {:?}", 
-                             ctx.local_peer, ctx.remote_peer);
+                    trace!("已更新FlowContext地址信息 - 本地: {:?}, 远程: {:?}", 
+                           ctx.local_peer, ctx.remote_peer);
                 }
                 
-                // 保存端口映射关系
-                {
-                    let mut mappings = port_mappings_clone.lock().unwrap();
-                    // 使用目标端口作为键，保存客户端地址
-                    mappings.insert(dst_addr.port(), src_addr);
-                    println!("🍎已保存端口映射: {}:{} -> {}", 
-                             dst_addr.ip(), dst_addr.port(), src_addr);
+                // 检查是否为DNS请求并且启用了DNS拦截
+                if dns_hijack && dst_addr.port() == 53 {
+                    // 创建UDP数据包
+                    let pkt = UdpPacket {
+                        data: data.clone(),
+                        src_addr: src_addr.into(),
+                        dst_addr: dst_addr.into(),
+                    };
+                    
+                    println!("🔍 拦截DNS请求: {}→{}, 大小: {}", src_addr, dst_addr, data.len());
+
+                    match hickory_proto::op::Message::from_vec(&pkt.data) {
+                        Ok(msg) => {
+                            let send_response =
+                                async |msg: hickory_proto::op::Message,
+                                       pkt: &UdpPacket| {
+                                    match msg.to_vec() {
+                                        Ok(data) => {
+                                            println!("🔍 发送DNS响应: {}→{}, 大小: {}", 
+                                                pkt.dst_addr, pkt.src_addr, data.len());
+                                            
+                                            if let Err(e) = ls_dns
+                                                .send((
+                                                    data,
+                                                    pkt.dst_addr,
+                                                    pkt.src_addr,
+                                                ))
+                                                .await
+                                            {
+                                                warn!(
+                                                    "failed to send udp packet to \
+                                                     netstack: {}",
+                                                    e
+                                                );
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                "failed to serialize dns response: {}",
+                                                e
+                                            );
+                                        }
+                                    }
+                                };
+
+                            // 获取查询的域名
+                            let query_domain = msg.query()
+                                .map(|q| q.name().to_ascii())
+                                .unwrap_or_else(|| "未知域名".to_string());
+                                
+                            println!("🔍 DNS查询域名: {}", query_domain);
+                            
+                            if msg.query().map(|q| q.query_type())
+                                == Some(RecordType::AAAA)
+                            {
+                                println!("🔍 不支持AAAA查询，拒绝解析: {}", query_domain);
+                                let resp = hickory_proto::op::Message::error_msg(
+                                    msg.id(),
+                                    msg.op_code(),
+                                    hickory_proto::op::ResponseCode::Refused,
+                                );
+                                send_response(resp, &pkt).await;
+                                continue 'read_packet;
+                            }
+
+                            let mut resp =
+                                match &resolver_dns {
+                                    Some(resolver) => {
+                                        println!("🔍 使用FakeIP解析: {}", query_domain);
+                                        match exchange_with_resolver(&resolver, &msg, true).await {
+                                            Ok(resp) => {
+                                                // 简单记录是否有A记录
+                                                let has_answers = !resp.answers().is_empty();
+                                                
+                                                if has_answers {
+                                                    println!("🔍 FakeIP解析成功: {} => FakeIP分配成功", query_domain);
+                                                } else {
+                                                    println!("🔍 FakeIP解析结果: {} => 无IP记录", query_domain);
+                                                }
+                                                resp
+                                            },
+                                            Err(e) => {
+                                                warn!("failed to exchange dns message: {}", e);
+                                                println!("🔍 FakeIP解析失败: {} - {}", query_domain, e);
+                                                continue 'read_packet;
+                                            }
+                                        }
+                                    },
+                                    None => {
+                                        warn!("DNS解析器未配置，无法处理DNS请求");
+                                        println!("🔍 DNS解析器未配置，无法处理查询: {}", query_domain);
+                                        let resp = hickory_proto::op::Message::error_msg(
+                                            msg.id(),
+                                            msg.op_code(),
+                                            hickory_proto::op::ResponseCode::ServFail,
+                                        );
+                                        send_response(resp, &pkt).await;
+                                        continue 'read_packet;
+                                    }
+                                };
+
+                            // TODO: figure out where the message id got lost
+                            resp.set_id(msg.id());
+
+                            send_response(resp, &pkt).await;
+                        }
+                        Err(e) => {
+                            warn!(
+                                "failed to parse dns packet: {}, putting it back to \
+                                 stack",
+                                e
+                            );
+                            println!("🔍 解析DNS数据包失败: {}", e);
+                        }
+                    };
+
+                    // don't forward dns packet to dispatcher
+                    continue 'read_packet;
                 }
                 
                 // 转换为目的地址格式
@@ -141,7 +263,7 @@ impl TunDatagramSession {
                     port: dst_addr.port(),
                 };
                 
-                // 发送到接收通道
+                // 非DNS请求，直接发送到接收通道，不需要创建UdpPacket
                 if let Err(e) = rx_sender.send((dest_addr, Buffer::from(data))).await {
                     error!("转发UDP数据到接收通道失败: {}", e);
                     // 继续处理下一个数据包

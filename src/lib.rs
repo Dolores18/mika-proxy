@@ -47,7 +47,7 @@ use socks5_udp::Socks5UdpHandler;
 
 // 添加 dns_server 模块
 mod dns_server;
-use dns_server::{DnsServer, MapBackStreamHandler, cache_writer};
+use dns_server::{DnsServer, MapBackStreamHandler, MapBackDatagramSessionHandler, cache_writer};
 
 // 添加 datagram 相关的导入
 use crate::flow::datagram::*;
@@ -73,6 +73,10 @@ mod ip_stack;
 use ip_stack::*;
 mod tun;
 use tun::*;
+
+// 添加fakeip_mapback模块
+mod fakeip_mapback;
+pub use fakeip_mapback::{FakeIpMapBackStreamHandler, FakeIpMapBackDatagramSessionHandler};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerStatus {
@@ -877,6 +881,32 @@ pub async fn start_tun1_server(
         Arc::downgrade(&datagram_handler) as Weak<dyn DatagramSessionHandler>,
     ));
 
+    // 创建FakeIP实例
+    let plugin_cache = data::PluginCache::new(data::PluginId(2), None);
+    let fakeip = Arc::new(FakeIp::new(
+        [198, 18], // 使用198.18.0.0/16作为FakeIP范围
+        [0; 14],  // IPv6前缀默认为0
+        plugin_cache
+    ));
+    
+    // 启动FakeIP缓存写入任务
+    tokio::spawn(fakeip::cache_writer(fakeip.clone()));
+    info!("FakeIP服务已初始化");
+
+    // 创建TCP和UDP调用链 - 使用FakeIpMapBack处理器替代原来的DnsServer和MapBack
+    
+    // 为TCP创建FakeIpMapBackStreamHandler
+    let tcp_with_mapback = Arc::new(FakeIpMapBackStreamHandler::new(
+        fakeip.clone(),
+        Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>
+    ));
+    
+    // 为UDP创建FakeIpMapBackDatagramSessionHandler
+    let udp_with_mapback = Arc::new(FakeIpMapBackDatagramSessionHandler::new(
+        fakeip.clone(), 
+        Arc::downgrade(&tun_handler) as Weak<dyn DatagramSessionHandler>
+    ));
+    
     // 创建TUN配置
     let gateway_str = tun_ip.to_string();
     let netmask_str = tun_netmask.to_string();
@@ -897,9 +927,14 @@ pub async fn start_tun1_server(
     // 设置启用TUN
     tun_config.enabled = true;
     
-    // 设置stream_handler
-    tun_config = tun_config.with_stream_handler(Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>);
-    tun_config = tun_config.with_datagram_handler(Arc::downgrade(&tun_handler) as Weak<dyn DatagramSessionHandler>);
+    // 启用DNS劫持并设置FakeIP
+    tun_config = tun_config.with_dns_hijack(true);
+    tun_config = tun_config.with_fakeip(fakeip.clone());
+    
+    // 设置stream_handler和datagram_handler，使用带FakeIpMapBack的处理器
+    tun_config = tun_config.with_stream_handler(Arc::downgrade(&tcp_with_mapback) as Weak<dyn StreamHandler>);
+    tun_config = tun_config.with_datagram_handler(Arc::downgrade(&udp_with_mapback) as Weak<dyn DatagramSessionHandler>);
+    
     info!("TUN配置已创建: {:?}", tun_config);
     
     // 获取TUN运行器
