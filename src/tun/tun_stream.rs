@@ -18,8 +18,8 @@ use crate::flow::*;
 pub struct TunTcpStream {
     inner: netstack_smoltcp::TcpStream,
     context: Arc<FlowContext>,
-    pending_write: Arc<Mutex<Buffer>>, // 改为Arc<Mutex<Buffer>>
-    has_pending_data: Arc<AtomicBool>, // 改为Arc<AtomicBool>
+    pending_write: Vec<u8>,         // 改为直接使用Vec<u8>，去掉Arc<Mutex<>>
+    has_pending_data: bool,         // 改为直接使用bool，去掉Arc<AtomicBool>
 }
 
 impl TunTcpStream {
@@ -29,8 +29,8 @@ impl TunTcpStream {
         Self {
             inner: stream,
             context: Arc::new(FlowContext::new(local_addr, remote_dest)),
-            pending_write: Arc::new(Mutex::new(Vec::new())),
-            has_pending_data: Arc::new(AtomicBool::new(false)),
+            pending_write: Vec::new(),   // 直接初始化为空Vec
+            has_pending_data: false,     // 直接初始化为false
         }
     }
 
@@ -40,8 +40,8 @@ impl TunTcpStream {
         Self {
             inner: stream,
             context: Arc::new(FlowContext::new_af_sensitive(local_addr, remote_dest)),
-            pending_write: Arc::new(Mutex::new(Vec::new())),
-            has_pending_data: Arc::new(AtomicBool::new(false)),
+            pending_write: Vec::new(),   // 直接初始化为空Vec
+            has_pending_data: false,     // 直接初始化为false
         }
     }
 
@@ -117,153 +117,78 @@ impl Stream for TunTcpStream {
     fn poll_tx_buffer(&mut self, _cx: &mut Context<'_>, size: NonZeroUsize) -> Poll<FlowResult<Buffer>> {
         // 直接返回一个新的缓冲区，准备接收待发送的数据
         println!("[TunTcpStream::poll_tx_buffer] 分配发送缓冲区，请求大小: {}", size.get());
-        let mut buffer = Vec::with_capacity(size.get());
+        let buffer = Vec::with_capacity(size.get());
         Poll::Ready(Ok(buffer))
     }
 
     fn commit_tx_buffer(&mut self, buffer: Buffer) -> FlowResult<()> {
-        // 立即发送数据，不再只是暂存
-        println!("[TunTcpStream::commit_tx_buffer] 提交发送缓冲区，大小: {}", buffer.len());
-        
         // 避免提交空缓冲区
         if buffer.is_empty() {
             println!("[TunTcpStream::commit_tx_buffer] 跳过空缓冲区");
             return Ok(());  // 静默跳过空缓冲区，不作为错误处理
         }
         
-        // TcpStream只实现了AsyncWrite，不能在这里同步发送
-        // 将数据保存到缓冲区，由poll_flush_tx处理
-        if let Ok(mut pending) = self.pending_write.lock() {
-            // 添加到现有缓冲区
-            if !pending.is_empty() {
-                println!("[TunTcpStream::commit_tx_buffer] 合并到现有缓冲区 (原大小: {})", pending.len());
-                pending.extend_from_slice(&buffer);
-            } else {
-                *pending = buffer;
-            }
-            
-            println!("[TunTcpStream::commit_tx_buffer] 更新后缓冲区大小: {}", pending.len());
-            self.has_pending_data.store(true, std::sync::atomic::Ordering::SeqCst);
-            
-            // 不再使用后台任务尝试立即发送，而是直接设置标志等待下一次poll_flush_tx
-            println!("[TunTcpStream::commit_tx_buffer] 数据已放入缓冲区，等待下次poll_flush_tx发送");
-            
-            // 添加一个立即触发的唤醒机制
-            // 这将尝试"伪造"一个微任务唤醒
-            #[cfg(feature = "fake_poll_wakeup")]
-            {
-                // 只有在特定feature启用时才包含此代码
-                use std::task::Wake;
-                
-                struct FakeWaker;
-                impl Wake for FakeWaker {
-                    fn wake(self: Arc<Self>) {
-                        // 不做任何事，只为了尽快唤醒任务
-                    }
-                }
-                
-                // 创建一个假唤醒器尝试触发任务唤醒
-                let waker = Arc::new(FakeWaker).into_waker();
-                let mut ctx = std::task::Context::from_waker(&waker);
-                
-                // 尝试直接获取写入进度
-                let _ = Pin::new(&mut self.inner).poll_flush(&mut ctx);
-            }
-            
-            Ok(())
+        println!("[TunTcpStream::commit_tx_buffer] 提交发送缓冲区，大小: {}", buffer.len());
+        
+        // 直接操作pending_write，不需要锁
+        if !self.pending_write.is_empty() {
+            println!("[TunTcpStream::commit_tx_buffer] 合并到现有缓冲区 (原大小: {})", self.pending_write.len());
+            self.pending_write.extend_from_slice(&buffer);
         } else {
-            println!("[TunTcpStream::commit_tx_buffer] 错误：无法锁定待发送缓冲区");
-            Err(FlowError::UnexpectedData)
+            self.pending_write = buffer;
         }
+        
+        println!("[TunTcpStream::commit_tx_buffer] 更新后缓冲区大小: {}", self.pending_write.len());
+        self.has_pending_data = true;
+        
+        println!("[TunTcpStream::commit_tx_buffer] 数据已放入缓冲区，等待下次poll_flush_tx发送");
+        Ok(())
     }
 
     fn poll_flush_tx(&mut self, cx: &mut Context<'_>) -> Poll<FlowResult<()>> {
-        println!("[TunTcpStream::poll_flush_tx] 开始刷新发送缓冲区");
+        println!("[TunTcpStream::poll_flush_tx] 极简版开始执行");
 
-        // 使用循环确保所有待处理数据都被尝试写入
-        loop {
-            let mut buffer = match self.pending_write.lock() {
-                Ok(mut guard) => {
-                    if guard.is_empty() {
-                        // 没有待发送的数据了
-                        self.has_pending_data.store(false, Ordering::SeqCst);
-                        break; // 跳出循环，进行最后的 flush
-                    }
-                    // 取出缓冲区内容进行处理，清空Mutex内部的Vec
-                    std::mem::take(&mut *guard)
+        // 检查是否有待发送数据
+        if self.has_pending_data && !self.pending_write.is_empty() {
+            println!("[TunTcpStream::poll_flush_tx] 尝试写入 {} 字节", self.pending_write.len());
+            
+            // 取出数据
+            let data = std::mem::take(&mut self.pending_write);
+            self.has_pending_data = false;
+            
+            // 尝试一次性写入
+            match Pin::new(&mut self.inner).poll_write(cx, &data) {
+                Poll::Ready(Ok(n)) => {
+                    println!("[TunTcpStream::poll_flush_tx] 写入了 {} 字节", n);
+                    // 不处理部分写入情况，即使 n < data.len() 也不管
                 }
-                Err(_) => {
-                    println!("[TunTcpStream::poll_flush_tx] 错误：无法锁定待发送缓冲区");
-                    return Poll::Ready(Err(FlowError::UnexpectedData));
+                Poll::Ready(Err(e)) => {
+                    println!("[TunTcpStream::poll_flush_tx] 写入错误: {:?}", e);
+                    return Poll::Ready(Err(convert_error(e)));
                 }
-            };
-
-            println!("[TunTcpStream::poll_flush_tx] 发现待发送数据 {} 字节", buffer.len());
-            let mut offset = 0;
-
-            // 循环写入当前缓冲区的数据
-            while offset < buffer.len() {
-                match Pin::new(&mut self.inner).poll_write(cx, &buffer[offset..]) {
-                    Poll::Ready(Ok(n)) => {
-                        if n == 0 {
-                            // 写入0字节通常表示错误或连接关闭
-                            println!("[TunTcpStream::poll_flush_tx] 写入0字节，视为错误");
-                            // 把未发送的数据放回 pending_write
-                            if offset < buffer.len() {
-                                if let Ok(mut guard) = self.pending_write.lock() {
-                                    let remaining_data = buffer.split_off(offset);
-                                    guard.extend_from_slice(&remaining_data);
-                                    self.has_pending_data.store(true, Ordering::SeqCst);
-                                }
-                            }
-                            return Poll::Ready(Err(FlowError::Io(io::Error::new(io::ErrorKind::WriteZero, "write zero"))));
-                        }
-                        println!("[TunTcpStream::poll_flush_tx] 发送了 {} 字节", n);
-                        offset += n;
-                    }
-                    Poll::Ready(Err(e)) => {
-                        println!("[TunTcpStream::poll_flush_tx] 发送错误: {:?}", e);
-                        // 把未发送的数据放回 pending_write
-                        if offset < buffer.len() {
-                           if let Ok(mut guard) = self.pending_write.lock() {
-                                let remaining_data = buffer.split_off(offset);
-                                guard.extend_from_slice(&remaining_data);
-                                self.has_pending_data.store(true, Ordering::SeqCst);
-                            }
-                        }
-                        return Poll::Ready(Err(convert_error(e)));
-                    }
-                    Poll::Pending => {
-                        println!("[TunTcpStream::poll_flush_tx] 写入挂起，保存剩余数据");
-                        // 把未发送的数据放回 pending_write
-                        if offset < buffer.len() {
-                            if let Ok(mut guard) = self.pending_write.lock() {
-                                let remaining_data = buffer.split_off(offset);
-                                guard.extend_from_slice(&remaining_data);
-                                self.has_pending_data.store(true, Ordering::SeqCst);
-                            } else {
-                                println!("[TunTcpStream::poll_flush_tx] 警告：无法锁定待发送缓冲区保存剩余数据");
-                                // 如果无法锁定，最好也返回Pending，避免丢失数据
-                            }
-                        }
-                        return Poll::Pending; // 底层流阻塞，稍后重试
-                    }
+                Poll::Pending => {
+                    // 将数据放回缓冲区，因为写入未完成
+                    self.pending_write = data;
+                    self.has_pending_data = true;
+                    println!("[TunTcpStream::poll_flush_tx] 写入挂起");
+                    return Poll::Pending;
                 }
             }
-            // 当前 buffer 处理完毕，循环继续检查 pending_write 是否还有数据
         }
 
-        // 所有数据已写入或写入被阻塞
-        // 现在执行最终的 flush 操作
-        println!("[TunTcpStream::poll_flush_tx] 所有待发送数据已尝试写入，执行最终刷新");
-        match ready!(Pin::new(&mut self.inner).poll_flush(cx)) {
-            Ok(()) => {
+        // 直接尝试刷新底层流
+        match Pin::new(&mut self.inner).poll_flush(cx) {
+            Poll::Ready(Ok(())) => {
                 println!("[TunTcpStream::poll_flush_tx] 刷新成功");
                 Poll::Ready(Ok(()))
             }
-            Err(e) => {
+            Poll::Ready(Err(e)) => {
                 println!("[TunTcpStream::poll_flush_tx] 刷新错误: {:?}", e);
                 Poll::Ready(Err(convert_error(e)))
+            }
+            Poll::Pending => {
+                println!("[TunTcpStream::poll_flush_tx] 刷新挂起");
+                Poll::Pending
             }
         }
     }
@@ -272,10 +197,7 @@ impl Stream for TunTcpStream {
         println!("[TunTcpStream::poll_close_tx] 开始关闭发送通道");
         
         // 检查是否有待发送数据
-        let has_pending_data = self.has_pending_data.load(std::sync::atomic::Ordering::SeqCst);
-        
-        // 如果有待发送数据，先刷新
-        if has_pending_data {
+        if self.has_pending_data {
             println!("[TunTcpStream::poll_close_tx] 发现未发送的数据，先刷新缓冲区");
             // 先确保数据被发送出去
             match self.poll_flush_tx(cx) {
