@@ -123,8 +123,8 @@ pub async fn dial_stream(
         (HostName::Ip(IpAddr::V4(ip)), Some(bind_v4), _) => {
           
             let test_ip = Ipv4Addr::new(110, 242, 68, 66);
-            println!("🌹tcp客户端使用测试IPv4 连接: {}", test_ip);
-            dial_socket_v4(test_ip, port, &bind_v4).await?
+            println!("🌹tcp客户端使用IPv4 连接: {}", ip);
+            dial_socket_v4(ip, port, &bind_v4).await?
         }
         (HostName::Ip(IpAddr::V6(ip)), _, Some(bind_v6)) => {
             println!("🌹tcp客户端使用 IPv6 连接: {}", ip);
