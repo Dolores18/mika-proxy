@@ -844,7 +844,7 @@ pub async fn start_tun1_server(
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
-    /*
+
     // 创建重定向工厂
     let redirect_factory = Arc::new(StreamRedirectOutboundFactory {
         remote_peer: proxy_addr.clone(),
@@ -856,10 +856,10 @@ pub async fn start_tun1_server(
         key,
         Arc::downgrade(&redirect_factory) as Weak<dyn StreamOutboundFactory>,
     ));
-     */
+    
     // 创建 StreamForwardHandler 实例
     let tcp_handler = Arc::new(forward::StreamForwardHandler {
-        outbound: Arc::downgrade(&socket_outbound_factory) as Weak<dyn StreamOutboundFactory>,
+        outbound: Arc::downgrade(&ss_factory) as Weak<dyn StreamOutboundFactory>,
         request_timeout: 10000,
         stat: stat.clone(),
     });

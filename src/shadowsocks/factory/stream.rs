@@ -39,8 +39,8 @@ where
             host: HostName::DomainName("baidu.com".to_string()),
             port: 80,
         };
-        util::write_dest(&mut tx_handshake, &test_dest);
-        println!("🌹tcp客户端ss工厂中测试写入的dest为：{}", test_dest.to_string());
+        util::write_dest(&mut tx_handshake, &context.remote_peer);
+        println!("🌹tcp客户端ss工厂中测试写入的dest为：{}", context.remote_peer.to_string());
       
         tx_handshake.extend_from_slice(initial_data);
 

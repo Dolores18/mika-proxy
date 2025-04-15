@@ -21,6 +21,7 @@ use crate::tun::datagram::{TunDatagramSession, TunDatagramHandler};
 use crate::flow::*;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use crate::fakeip::FakeIp; // 导入FakeIp
+use crate::tun::tun_stream::TunStreamHandler; // 添加这一行导入TunStreamHandler
 // 添加处理UDP连接的函数
 async fn handle_inbound_udp(
     udp_socket: netstack_smoltcp::UdpSocket,
@@ -79,57 +80,6 @@ fn maybe_add_routes(routes: Option<Vec<String>>, tun_name: &str) {
     }
 }
 
-async fn handle_inbound_stream(
-    mut stream: netstack_smoltcp::TcpStream,
-    local_addr: SocketAddr, 
-    remote_addr: SocketAddr,
-    stream_handler: Option<Arc<dyn StreamHandler>>, 
-) {
-    if let Some(handler) = stream_handler {
-        // 创建流上下文
-        let dest_addr = crate::flow::DestinationAddr {
-            host: crate::flow::HostName::Ip(remote_addr.ip()),
-            port: remote_addr.port(),
-        };
-        let context = Box::new(crate::flow::FlowContext::new(local_addr, dest_addr));
-        
-        info!("处理来自 {}:{} 的入站连接", remote_addr.ip(), remote_addr.port());
-        
-        // 预先读取一些数据确保流状态正确初始化
-        let mut init_buf = vec![0u8; 4096];
-        let read_bytes = match tokio::io::AsyncReadExt::read(&mut stream, &mut init_buf).await {
-            Ok(n) => n,
-            Err(e) => {
-                error!("从流中预读数据失败: {}", e);
-                return;
-            }
-        };
-        
-        // 调整缓冲区大小为实际读取的字节数
-        init_buf.truncate(read_bytes);
-        
-        // 使用工厂创建适配器
-        let factory = TunStreamFactory::new(handler.clone());
-        let mut adapter = factory.create_adapter_from_netstack(stream, local_addr, remote_addr).await;
-        
-        // 如果预读到了数据，需要将数据传递给处理器
-        if read_bytes > 0 && !init_buf.is_empty() {
-            // 将预读的数据封装到Buffer中
-            let pre_buffer = crate::flow::Buffer::from(init_buf);
-            
-            // 处理连接时传入预读的数据
-            if let Some(flow) = adapter.take_stream() {
-                handler.on_stream(flow, pre_buffer, context);
-                return;
-            }
-        }
-        
-        // 如果没有预读到数据或无法获取流，使用原来的处理方式
-        factory.handle_connection(adapter, context);
-    } else {
-        info!("没有配置stream_handler，连接将被丢弃");
-    }
-}
 
 // 辅助函数，用于错误转换
 fn to_box_err<E>(e: E) -> Box<dyn StdError + Send + Sync>
@@ -246,12 +196,23 @@ pub fn get_runner(cfg: Tunconfig) -> Result<Option<Runner>, Box<dyn StdError + S
             let mut tcp_listener = tcp_listener;
             while let Some((stream, local_addr, remote_addr)) = tcp_listener.next().await {
                 let handler_ref_clone = stream_handler.clone();
-                tokio::spawn( handle_inbound_stream(
-                    stream,
-                    local_addr,
-                    remote_addr,
-                    handler_ref_clone,
-                ));
+                if let Some(handler) = handler_ref_clone {
+                    // 先创建TunTcpStream
+                    let tun_stream = TunStreamHandler::create_tun_stream(
+                        stream,
+                        local_addr,
+                        remote_addr,
+                        true, // 设置 af_sensitive 为 true
+                    );
+                    
+                    // 不使用tokio::spawn，直接调用on_stream，避免TcpStream被过早丢弃
+                    println!("[inbound] 处理新的TCP连接: {} -> {}", remote_addr, local_addr);
+                    handler.on_stream(
+                        Box::new(tun_stream),
+                        Vec::new(), // 空的初始数据
+                        Box::new(FlowContext::new_af_sensitive(local_addr, DestinationAddr::from(remote_addr)))
+                    );
+                }
             }
             Ok(())
         }));

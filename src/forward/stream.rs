@@ -77,7 +77,7 @@ fn poll_forward_oneway(
                 )?;
 
                 if let Err((buf, e)) = rx.commit_rx_buffer(buf) {
-                    info!("客户端提交接收缓冲区时发生错误: {:?}", e);
+                    println!("🍓客户端提交接收缓冲区时发生错误: {:?}", e);
                     let _ = tx.commit_tx_buffer(buf);
                     return Poll::Ready(Err(e));
                 }
@@ -90,6 +90,7 @@ fn poll_forward_oneway(
                         let len = buf.len();
                         println!("🌹tcp客户端接收到来自服务端的数据长度: {},数据是{:0X?}", len, buf);
                         tx.commit_tx_buffer(buf)?;
+                        ready!(tx.poll_flush_tx(cx))?;
                         counter.fetch_add(len as u64, Ordering::Relaxed);
                         ForwardState::AwatingSizeHint
                     }
@@ -97,6 +98,7 @@ fn poll_forward_oneway(
                         info!("接收到 EOF");
                         let len = buf.len();
                         tx.commit_tx_buffer(buf)?;
+                        ready!(tx.poll_flush_tx(cx))?;
                         counter.fetch_add(len as u64, Ordering::Relaxed);
                         ForwardState::Closing
                     }

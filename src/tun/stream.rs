@@ -136,14 +136,18 @@ impl Stream for NetstackStreamAdapter {
         let mut read_buf = tokio::io::ReadBuf::uninit(rx_buf.spare_capacity_mut());
         println!("🔍 tunstream poll_rx_buffer: ReadBuf初始化, 空间大小: {}", read_buf.capacity());
         
-        match ready!(Pin::new(&mut self.inner).poll_read(cx, &mut read_buf)) {
-            Ok(()) => {
+        match Pin::new(&mut self.inner).poll_read(cx, &mut read_buf) {
+            Poll::Ready(Ok(())) => {
                 let filled = read_buf.filled().len();
                 println!("🔍 tunstream poll_rx_buffer: 读取完成, 填充大小: {}", filled);
                 
                 let mut rx_buf = self.rx_buf.take().unwrap();
                 if filled == 0 {
-                    println!("🔍 tunstream poll_rx_buffer: 读取为0字节, 返回EOF");
+                    // filled == 0 表示流结束 (EOF)
+                    println!("🔍 tunstream poll_rx_buffer: 读取为0字节，识别为 EOF");
+                    // 清空缓冲区，因为没有新数据
+                    rx_buf.clear();
+                    // 返回包含空缓冲区和 EOF 错误的 Poll::Ready
                     Poll::Ready(Err((rx_buf, FlowError::Eof)))
                 } else {
                     println!("🔍 tunstream poll_rx_buffer: 设置新长度: {} + {} = {}", rx_buf.len(), filled, rx_buf.len() + filled);
@@ -153,12 +157,19 @@ impl Stream for NetstackStreamAdapter {
                     Poll::Ready(Ok(rx_buf))
                 }
             }
-            Err(e) => {
-                println!("🔍 tunstream poll_rx_buffer: 读取错误: {}", e);
+            Poll::Ready(Err(e)) => {
+                // 打印更详细的错误信息，包括错误类型
+                println!("🔍 tunstream poll_rx_buffer: 读取错误: {}, Kind: {:?}", e, e.kind());
+                // 只有真正的错误才返回EOF
                 Poll::Ready(Err((self.rx_buf.take().unwrap(), e.into())))
+            }
+            Poll::Pending => {
+                println!("🔍 tunstream poll_rx_buffer: 读取挂起，等待更多数据");
+                Poll::Pending
             }
         }
     }
+    
 
     // Write
     fn poll_tx_buffer(
@@ -183,25 +194,39 @@ impl Stream for NetstackStreamAdapter {
     }
     
     fn commit_tx_buffer(&mut self, buffer: Buffer) -> FlowResult<()> {
-        println!("🔍 tunstream commit_tx_buffer: 准备提交发送缓冲区, 大小: {}, 容量: {}", buffer.len(), buffer.capacity());
+        println!("🔍 tunstream commit_tx_buffer: 准备提交发送缓冲区, 大小: {}, 容量: {}", 
+                 buffer.len(), buffer.capacity());
         
-        // 验证缓冲区是否为空
+        // 验证缓冲区是否为空，但不要阻止提交
         if buffer.is_empty() {
-            println!("🔍 tunstream commit_tx_buffer: 警告 - 提交了空缓冲区");
+            println!("🔍 tunstream commit_tx_buffer: 警告 - 提交了空缓冲区，但仍继续处理");
         }
         
-        // 确保缓冲区已初始化
-        if buffer.len() > buffer.capacity() {
-            println!("🔍 tunstream commit_tx_buffer: 错误 - 缓冲区长度超过容量!");
-            return Err(FlowError::Eof);
-        }
+        // 移除过于严格的检查
+        // if buffer.len() > buffer.capacity() {
+        //     println!("🔍 tunstream commit_tx_buffer: 错误 - 缓冲区长度超过容量!");
+        //     return Err(FlowError::Eof);
+        // }
         
         // 确保存储缓冲区和重置偏移量
         self.tx_buf = Some((buffer, 0));
-        println!("🔍 tunstream commit_tx_buffer: 发送缓冲区已提交, 准备发送, 缓冲区内容: {:0x?}", self.tx_buf);
+        
+        // 打印缓冲区的前几个字节，帮助调试
+        if let Some((buf, _)) = &self.tx_buf {
+            if !buf.is_empty() {
+                let preview_len = buf.len().min(32);
+                println!("🔍 tunstream commit_tx_buffer: 发送缓冲区已提交, 准备发送");
+                println!("🔍 tunstream commit_tx_buffer: 缓冲区前{}字节: {:02x?}", 
+                         preview_len, &buf[..preview_len]);
+            } else {
+                println!("🔍 tunstream commit_tx_buffer: 发送缓冲区已提交(空)");
+            }
+        }
         
         Ok(())
     }
+    
+    
     
     fn poll_flush_tx(&mut self, cx: &mut Context<'_>) -> Poll<FlowResult<()>> {
         let Some((tx_buf, offset)) = self.tx_buf.as_mut() else {
@@ -211,23 +236,55 @@ impl Stream for NetstackStreamAdapter {
         
         println!("🔍 tunstream poll_flush_tx: 开始发送数据, 偏移量: {}, 总长度: {}", *offset, tx_buf.len());
         
-        while *offset < tx_buf.len() {
-            let remaining = &tx_buf[*offset..];
-            println!("🔍 tunstream poll_flush_tx: 准备发送 {} 字节数据", remaining.len());
-            
-            let written = ready!(Pin::new(&mut self.inner).poll_write(cx, remaining))?;
-            println!("🔍 tunstream poll_flush_tx: 成功写入 {} 字节", written);
-            
-            *offset += written;
-            println!("🔍 tunstream poll_flush_tx: 更新偏移量到 {}", *offset);
+        // 如果没有数据要发送或已经发送完毕，直接返回成功
+        if tx_buf.is_empty() || *offset >= tx_buf.len() {
+            println!("🔍 tunstream poll_flush_tx: 没有数据需要发送或已发送完毕");
+            return Poll::Ready(Ok(()));
         }
         
-        println!("🔍 tunstream poll_flush_tx: 所有数据已发送，执行flush");
-        ready!(Pin::new(&mut self.inner).poll_flush(cx))?;
-        println!("🔍 tunstream poll_flush_tx: flush完成");
+        // 尝试写入剩余数据
+        let remaining = &tx_buf[*offset..];
+        println!("🔍 tunstream poll_flush_tx: 准备发送 {} 字节数据", remaining.len());
         
-        Poll::Ready(Ok(()))
+        match Pin::new(&mut self.inner).poll_write(cx, remaining) {
+            Poll::Ready(Ok(written)) => {
+                println!("🔍 tunstream poll_flush_tx: 成功写入 {} 字节", written);
+                *offset += written;
+                
+                // 如果还有数据未发送完，返回Pending让调用者继续发送
+                if *offset < tx_buf.len() {
+                    println!("🔍 tunstream poll_flush_tx: 还有 {} 字节未发送，继续发送", tx_buf.len() - *offset);
+                    return Poll::Pending;
+                }
+                
+                // 数据发送完毕，执行flush
+                println!("🔍 tunstream poll_flush_tx: 所有数据已发送，执行flush");
+                match Pin::new(&mut self.inner).poll_flush(cx) {
+                    Poll::Ready(Ok(())) => {
+                        println!("🔍 tunstream poll_flush_tx: flush完成");
+                        Poll::Ready(Ok(()))
+                    }
+                    Poll::Ready(Err(e)) => {
+                        println!("🔍 tunstream poll_flush_tx: flush错误: {}", e);
+                        Poll::Ready(Err(e.into()))
+                    }
+                    Poll::Pending => {
+                        println!("🔍 tunstream poll_flush_tx: flush挂起，稍后再试");
+                        Poll::Pending
+                    }
+                }
+            }
+            Poll::Ready(Err(e)) => {
+                println!("🔍 tunstream poll_flush_tx: 写入错误: {}", e);
+                Poll::Ready(Err(e.into()))
+            }
+            Poll::Pending => {
+                println!("🔍 tunstream poll_flush_tx: 写入挂起，稍后再试");
+                Poll::Pending
+            }
+        }
     }
+    
 
     fn poll_close_tx(&mut self, cx: &mut Context<'_>) -> Poll<FlowResult<()>> {
         ready!(self.poll_flush_tx(cx))?;

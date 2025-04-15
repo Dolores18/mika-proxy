@@ -113,6 +113,8 @@ def fetch_url(host, port=80, path="/", use_hostname_header=True, original_hostna
     """
     s = socket.socket()
     try:
+        # 设置5秒超时，防止连接卡住
+        s.settimeout(5)
         s.connect((host, port))
         
         # 如果host是IP地址且use_hostname_header为True，
@@ -122,38 +124,67 @@ def fetch_url(host, port=80, path="/", use_hostname_header=True, original_hostna
             # 使用传入的原始域名作为Host头
             host_header = original_hostname
         
-        request = f"GET {path} HTTP/1.1\r\nHost: {host_header}\r\nConnection: close\r\n\r\n"
+        request = f"GET {path} HTTP/1.1\r\nHost: {host_header}\r\nConnection: keep-alive\r\n\r\n"
         s.send(request.encode())
         
         # 先读取响应头
         header_data = b""
         while True:
-            chunk = s.recv(1)
+            chunk = s.recv(4096)  # 增大缓冲区以提高效率
             if not chunk:
                 break
             header_data += chunk
-            if header_data.endswith(b"\r\n\r\n"):
+            if b"\r\n\r\n" in header_data:
+                # 分离响应头和可能包含的部分响应体
+                header_end = header_data.find(b"\r\n\r\n") + 4
+                header_part = header_data[:header_end]
+                body_part = header_data[header_end:]
                 break
         
         # 解析 Content-Length
-        headers = header_data.decode().split("\r\n")
-        content_length = 0
+        headers = header_part.decode().split("\r\n")
+        content_length = None
         for header in headers:
             if header.lower().startswith("content-length:"):
                 content_length = int(header.split(":")[1].strip())
                 break
         
-        # 读取响应体
-        body_data = b""
-        while len(body_data) < content_length:
-            chunk = s.recv(4096)
-            if not chunk:
-                break
-            body_data += chunk
+        # 如果没有Content-Length头，则使用Transfer-Encoding或直到连接关闭
+        if content_length is None:
+            print("警告: 没有找到Content-Length头，将读取直到超时或服务器关闭连接")
             
-        return header_data + body_data
+            # 读取已有的响应体部分
+            body_data = body_part
+            
+            # 继续读取直到超时或连接关闭
+            try:
+                while True:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break  # 连接关闭
+                    body_data += chunk
+            except socket.timeout:
+                print("读取数据超时，已接收部分数据")
+        else:
+            # 已经读取的响应体长度
+            body_data = body_part
+            bytes_received = len(body_data)
+            
+            # 继续读取直到收到所有内容
+            while bytes_received < content_length:
+                try:
+                    chunk = s.recv(min(4096, content_length - bytes_received))
+                    if not chunk:
+                        break  # 连接意外关闭
+                    body_data += chunk
+                    bytes_received = len(body_data)
+                except socket.timeout:
+                    print(f"读取数据超时，已接收 {bytes_received}/{content_length} 字节")
+                    break
+            
+        return header_part + body_data
     finally:
-        s.close()
+        s.close()  # 显式关闭连接
 
 def is_ip_address(addr):
     """检查字符串是否是IP地址"""

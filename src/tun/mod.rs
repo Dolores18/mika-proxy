@@ -19,3 +19,5 @@ pub mod datagram;
 pub use datagram::*;
 pub mod exchange_with_resolver;
 pub use exchange_with_resolver::*;
+pub mod tun_stream;
+pub use tun_stream::*;
