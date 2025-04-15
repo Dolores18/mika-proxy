@@ -822,12 +822,17 @@ pub async fn start_tun1_server(
     let system_resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
     // 初始化MacTun设备
     info!("初始化MacTun设备: {}", tun_name);
-    let tun = MacTun::new(tun_name, tun_ip, tun_netmask, mtu)?;
+    
+    // 获取当前运行时句柄
+    let runtime_handle = tokio::runtime::Handle::current();
+    
+    // 注意：MacTun::new 不是异步函数，不需要 await
+    let tun = MacTun::new(tun_name, tun_ip, tun_netmask, mtu, runtime_handle)?;
     let tun_arc = Arc::new(tun);
     
     info!("TUN设备已创建: {}", tun_arc.get_name());
     info!("TUN设备IP地址: {}", tun_arc.get_address());
-       // 修改代理地址创建方式
+    // 修改代理地址创建方式
     let server_config_clone = Arc::new(server_config.clone());
     let proxy_addr = server_config_clone.create_fixed_adrr();
 
@@ -859,7 +864,7 @@ pub async fn start_tun1_server(
     ));
     // 创建 StreamForwardHandler 实例，
     let tcp_handler = Arc::new(forward::StreamForwardHandler {
-        outbound: Arc::downgrade(&socket_outbound_factory2) as Weak<dyn StreamOutboundFactory>,
+        outbound: Arc::downgrade(&ss_factory) as Weak<dyn StreamOutboundFactory>,
         request_timeout: 10000,
         stat: stat,
     });
@@ -917,8 +922,8 @@ pub async fn start_tun1_server(
     trace!("IP 栈任务已启动，任务句柄: {:?}", ip_stack_task);
     info!("TUN服务器启动完成");
     
-    // 等待IP栈任务完成，而不是仅等待中断信号
-    println!("TUN服务器正在运行 - 按Ctrl+C退出");
+    // 获取 tun_arc 的强引用用于关闭操作
+    let tun_ref = Arc::clone(&tun_arc);
     
     // 使用tokio::select同时等待IP栈任务完成和Ctrl+C信号
     tokio::select! {
@@ -928,18 +933,14 @@ pub async fn start_tun1_server(
         _ = tokio::signal::ctrl_c() => {
             println!("收到中断信号，正在关闭TUN服务器...");
             
-            // 使用简单方法直接关闭，不尝试类型转换
+            // 使用新的shutdown方法安全关闭TUN设备
             println!("正在关闭TUN设备...");
-            drop(tun_arc); // 强制释放TUN设备资源
+            // 获取内部引用并调用shutdown方法
+            tun_ref.shutdown();
             
-            // 添加退出标志
+            // 等待资源清理完成
             println!("TUN服务器正在退出...");
-            
-            // 等待一小段时间让资源清理完成
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            
-            // 强制结束进程
-            std::process::exit(0);
         }
     }
     
