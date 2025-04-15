@@ -195,7 +195,7 @@ def is_ip_address(addr):
         return False
 
 # 使用示例
-target_domain = "example.com"
+target_domain = "chatgpt.com"
 print(f"正在查询 {target_domain} 的IP地址...")
 ip_address = dns_query(target_domain)
 

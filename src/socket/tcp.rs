@@ -253,7 +253,7 @@ pub async fn dial_stream(
     };
 
     if !initial_data.is_empty() {
-        println!("🌹tcp客户端初始数据长度: {},数据是{:0X?}", initial_data.len(), initial_data);
+        println!("🌹tcp客户端初始数据长度: {},数据是{:0X?}", initial_data.len(), &initial_data[0..20.min(initial_data.len())]);
         println!("🌹tcp客户端正在发送初始数据...");
         tcp_stream.write_all(initial_data).await?;
         println!("🌹tcp客户端初始数据发送完成");

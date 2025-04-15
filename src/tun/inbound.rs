@@ -197,21 +197,23 @@ pub fn get_runner(cfg: Tunconfig) -> Result<Option<Runner>, Box<dyn StdError + S
             while let Some((stream, local_addr, remote_addr)) = tcp_listener.next().await {
                 let handler_ref_clone = stream_handler.clone();
                 if let Some(handler) = handler_ref_clone {
-                    // 先创建TunTcpStream
-                    let tun_stream = TunStreamHandler::create_tun_stream(
-                        stream,
-                        local_addr,
-                        remote_addr,
-                        true, // 设置 af_sensitive 为 true
-                    );
-                    
-                    // 不使用tokio::spawn，直接调用on_stream，避免TcpStream被过早丢弃
-                    println!("[inbound] 处理新的TCP连接: {} -> {}", remote_addr, local_addr);
-                    handler.on_stream(
-                        Box::new(tun_stream),
-                        Vec::new(), // 空的初始数据
-                        Box::new(FlowContext::new_af_sensitive(local_addr, DestinationAddr::from(remote_addr)))
-                    );
+                    tokio::spawn(async move { // 将处理逻辑放入新的异步任务
+                        // 先创建TunTcpStream
+                        let tun_stream = TunStreamHandler::create_tun_stream(
+                            stream,
+                            local_addr,
+                            remote_addr,
+                            true, // 设置 af_sensitive 为 true
+                        );
+                        println!("[inbound] 处理新的TCP连接: {} -> {}", remote_addr, local_addr);
+                        handler.on_stream(
+                            Box::new(tun_stream),
+                            Vec::new(), // 空的初始数据
+                            Box::new(FlowContext::new_af_sensitive(local_addr, DestinationAddr::from(remote_addr)))
+                        );
+                        // 注意：如果on_stream本身不返回Future或不耗时，spawn可能意义不大
+                        // 但如果on_stream内部启动了耗时任务(如StreamForwardHandler)，spawn就有意义
+                    });
                 }
             }
             Ok(())

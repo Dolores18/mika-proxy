@@ -32,7 +32,7 @@ where
     }
     fn get_req(&self, context: &FlowContext, initial_data: &[u8]) -> (Vec<u8>, C) {
         let mut tx_handshake = Vec::with_capacity(259 + initial_data.len());
-        println!("🌹tcp客户端ss工厂中接收到的context.remote_peer.host为：{}", context.remote_peer.host.to_string());
+        println!("🍓ss工厂中接收到的context.remote_peer.host为：{}", context.remote_peer.host.to_string());
         
       
         let test_dest = DestinationAddr {
@@ -84,7 +84,7 @@ where
         initial_data: &'_ [u8],
     ) -> FlowResult<(Box<dyn Stream>, Buffer)> {
         let outbound_factory = self.next.upgrade().ok_or(FlowError::NoOutbound)?;
-        println!("🌹tcp客户端ss工厂进行处理,初始数据是：{:0x?}", initial_data);
+        println!("🌹tcp客户端ss工厂进行处理,初始数据是：{:0x?}", &initial_data[0..20.min(initial_data.len())]);
         let ((next, initial_res), tx_crypto) = {
             let (tx_buffer, tx_crypto) = self.get_req(context, initial_data);
 
