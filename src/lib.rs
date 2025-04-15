@@ -877,7 +877,56 @@ pub async fn start_tun1_server(
         outbound: Arc::downgrade(&socket_outbound_factory) as Weak<dyn DatagramSessionFactory>,
         stat: stat,
     });
+     // 创建FakeIP实例
+     let plugin_cache = data::PluginCache::new(data::PluginId(2), None);
+     let fakeip = Arc::new(FakeIp::new(
+         [198, 18], // 使用198.18.0.0/16作为FakeIP范围
+         [0; 14],  // IPv6前缀默认为0
+         plugin_cache
+     ));
+     
+     // 启动FakeIP缓存写入任务
+     tokio::spawn(fakeip::cache_writer(fakeip.clone()));
+     info!("FakeIP服务已初始化");
+ 
+     // 创建TCP和UDP调用链 - 使用FakeIpMapBack处理器替代原来的DnsServer和MapBack
+     
+     // 为TCP创建FakeIpMapBackStreamHandler
+     let tcp_with_mapback = Arc::new(FakeIpMapBackStreamHandler::new(
+         fakeip.clone(),
+         Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>
+     ));
+     
+     // 为UDP创建FakeIpMapBackDatagramSessionHandler
+     let udp_with_mapback = Arc::new(FakeIpMapBackDatagramSessionHandler::new(
+         fakeip.clone(), 
+         Arc::downgrade(&tun_handler) as Weak<dyn DatagramSessionHandler>
+     ));
+ // 创建FakeIP实例
+    let plugin_cache = data::PluginCache::new(data::PluginId(2), None);
+    let fakeip = Arc::new(FakeIp::new(
+        [198, 18], // 使用198.18.0.0/16作为FakeIP范围
+        [0; 14],  // IPv6前缀默认为0
+        plugin_cache
+    ));
     
+    // 启动FakeIP缓存写入任务
+    tokio::spawn(fakeip::cache_writer(fakeip.clone()));
+    info!("FakeIP服务已初始化");
+
+    // 创建TCP和UDP调用链 - 使用FakeIpMapBack处理器替代原来的DnsServer和MapBack
+    
+    // 为TCP创建FakeIpMapBackStreamHandler
+    let tcp_with_mapback = Arc::new(FakeIpMapBackStreamHandler::new(
+        fakeip.clone(),
+        Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>
+    ));
+    
+    // 为UDP创建FakeIpMapBackDatagramSessionHandler
+    let udp_with_mapback = Arc::new(FakeIpMapBackDatagramSessionHandler::new(
+        fakeip.clone(), 
+        Arc::downgrade(&tun_handler) as Weak<dyn DatagramSessionHandler>
+    ));  
     // 运行IP栈
     trace!("准备启动 IP 栈任务");
     let ip_stack_task = ip_stack::run(
