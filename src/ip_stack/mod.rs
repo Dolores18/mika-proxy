@@ -237,7 +237,7 @@ pub fn run(
     tokio::runtime::Handle::current().spawn_blocking(move || {
         while let Some(recv_buf) = tun.blocking_recv() {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-            println!("🍎ip_stack: 收到数据包，时间: {}s {}ms，长度: {}, 数据包内容(十六进制): {:02x?}", now.as_secs(), now.subsec_millis(), recv_buf.len(), recv_buf);
+            println!("🍎ip_stack: 收到数据包，时间: {}s {}ms，长度: {}, 数据包内容(十六进制): {:02x?}", now.as_secs(), now.subsec_millis(), recv_buf.len(), &recv_buf[0..20]);
             process_packet(&stack, recv_buf,dns_hijack, &resolver);
         }
     })
@@ -345,7 +345,7 @@ fn process_tcp(
     packet: Buffer,
 
 ) {
-    println!("🍎ip_stack: TCP包，数据包内容(十六进制): {:02x?}", packet);
+    //println!("🍎ip_stack: TCP包，数据包内容(十六进制): {:02x?}", packet);
 
     
 

@@ -32,15 +32,15 @@ where
     }
     fn get_req(&self, context: &FlowContext, initial_data: &[u8]) -> (Vec<u8>, C) {
         let mut tx_handshake = Vec::with_capacity(259 + initial_data.len());
-        println!("🌹tcp客户端ss工厂中接收到的context.remote_peer.host为：{}", context.remote_peer.host.to_string());
+        println!("🌹ss工厂中接收到的context.remote_peer.host为：{}", context.remote_peer.host.to_string());
         
       
         let test_dest = DestinationAddr {
             host: HostName::DomainName("baidu.com".to_string()),
             port: 80,
         };
-        util::write_dest(&mut tx_handshake, &test_dest);
-        println!("🌹tcp客户端ss工厂中测试写入的dest为：{}", test_dest.to_string());
+        util::write_dest(&mut tx_handshake, &context.remote_peer);
+        println!("🌹tcp客户端ss工厂中测试写入的dest为：{}", &context.remote_peer.to_string());
       
         tx_handshake.extend_from_slice(initial_data);
 
