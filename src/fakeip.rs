@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
+use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use async_trait::async_trait;
 use lru::LruCache;
@@ -88,6 +90,62 @@ impl FakeIp {
         };
         self.plugin_cache.set(PLUGIN_CACHE_KEY, &cache).ok();
     }
+
+    // 新增方法: 检查IP是否由FakeIP分配
+    pub fn is_fake_ip_v4(&self, ip: Ipv4Addr) -> bool {
+        let ip_bytes = ip.octets();
+        let prefix = ((ip_bytes[0] as u16) << 8) | (ip_bytes[1] as u16);
+        prefix == self.prefix_v4
+    }
+
+    pub fn is_fake_ip_v6(&self, ip: Ipv6Addr) -> bool {
+        let ip_bytes = ip.octets();
+        let mut prefix = [0u8; 14];
+        prefix.copy_from_slice(&ip_bytes[..14]);
+        prefix == self.prefix_v6
+    }
+
+    // 新增方法: 尝试将FakeIP反向映射到域名
+    pub fn lookup_domain_by_fake_ip(&self, ip: IpAddr) -> Option<String> {
+        match ip {
+            IpAddr::V4(ipv4) => self.lookup_domain_by_fake_ipv4(ipv4),
+            IpAddr::V6(ipv6) => self.lookup_domain_by_fake_ipv6(ipv6),
+        }
+    }
+
+    fn lookup_domain_by_fake_ipv4(&self, ip: Ipv4Addr) -> Option<String> {
+        if !self.is_fake_ip_v4(ip) {
+            return None;
+        }
+
+        let ip_bytes = ip.octets();
+        let index = ((ip_bytes[2] as u16) << 8) | (ip_bytes[3] as u16);
+        
+        let inner = self.inner.lock().unwrap();
+        for (domain, &idx) in inner.cache.iter() {
+            if idx == index {
+                return Some(domain.clone());
+            }
+        }
+        None
+    }
+
+    fn lookup_domain_by_fake_ipv6(&self, ip: Ipv6Addr) -> Option<String> {
+        if !self.is_fake_ip_v6(ip) {
+            return None;
+        }
+
+        let ip_bytes = ip.octets();
+        let index = ((ip_bytes[14] as u16) << 8) | (ip_bytes[15] as u16);
+        
+        let inner = self.inner.lock().unwrap();
+        for (domain, &idx) in inner.cache.iter() {
+            if idx == index {
+                return Some(domain.clone());
+            }
+        }
+        None
+    }
 }
 
 #[async_trait]
@@ -145,5 +203,15 @@ pub async fn cache_writer(plugin: Arc<FakeIp>) {
             Some(plugin) => plugin.save_cache(),
             None => break,
         }
+    }
+}
+
+// 为FakeIp实现Debug trait
+impl fmt::Debug for FakeIp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FakeIp")
+            .field("prefix_v4", &self.prefix_v4)
+            .field("prefix_v6", &format!("{:?}", self.prefix_v6))
+            .finish()
     }
 }

@@ -72,5 +72,6 @@ tun = { version = "0.7", features = ["async", "tokio"] }
 libc = "0.2.171"
 parking_lot = "0.12.1"
 nix = "0.26.2"
+hickory-proto = "0.25.1"
 [features]
 lru = []

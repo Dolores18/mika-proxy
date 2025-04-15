@@ -6,3 +6,5 @@ pub mod mactun;
 
 pub use self::mactun::MacTun;
 
+pub mod exchange_with_resolver;
+pub use self::exchange_with_resolver::exchange_with_resolver;
