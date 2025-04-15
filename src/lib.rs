@@ -859,7 +859,7 @@ pub async fn start_tun1_server(
     ));
     // 创建 StreamForwardHandler 实例，
     let tcp_handler = Arc::new(forward::StreamForwardHandler {
-        outbound: Arc::downgrade(&socket_outbound_factory2) as Weak<dyn StreamOutboundFactory>,
+        outbound: Arc::downgrade(&ss_factory) as Weak<dyn StreamOutboundFactory>,
         request_timeout: 10000,
         stat: stat,
     });
