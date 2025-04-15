@@ -194,26 +194,42 @@ pub fn get_runner(cfg: Tunconfig) -> Result<Option<Runner>, Box<dyn StdError + S
         // 处理TCP连接
         futs.push(Box::pin(async move {
             let mut tcp_listener = tcp_listener;
+            
+            // 创建TunStreamFactory实例，使用现有的stream_handler
+            let stream_factory = match &stream_handler {
+                Some(handler) => {
+                    let handler_clone = handler.clone();
+                    Some(crate::tun::stream::TunStreamFactory::new(handler_clone))
+                },
+                None => None
+            };
+            
             while let Some((stream, local_addr, remote_addr)) = tcp_listener.next().await {
-                let handler_ref_clone = stream_handler.clone();
-                if let Some(handler) = handler_ref_clone {
-                    tokio::spawn(async move { // 将处理逻辑放入新的异步任务
-                        // 先创建TunTcpStream
-                        let tun_stream = TunStreamHandler::create_tun_stream(
-                            stream,
-                            local_addr,
-                            remote_addr,
-                            true, // 设置 af_sensitive 为 true
-                        );
+                // 使用TunStreamFactory处理连接
+                if let Some(factory) = &stream_factory {
+                    let factory_clone = factory.clone();
+                    
+                    tokio::spawn(async move {
                         println!("[inbound] 处理新的TCP连接: {} -> {}", remote_addr, local_addr);
-                        handler.on_stream(
-                            Box::new(tun_stream),
-                            Vec::new(), // 空的初始数据
-                            Box::new(FlowContext::new_af_sensitive(local_addr, DestinationAddr::from(remote_addr)))
-                        );
-                        // 注意：如果on_stream本身不返回Future或不耗时，spawn可能意义不大
-                        // 但如果on_stream内部启动了耗时任务(如StreamForwardHandler)，spawn就有意义
+                        
+                        // 创建流适配器
+                        let adapter = factory_clone.create_adapter_from_netstack(
+                            stream,
+                            local_addr, 
+                            remote_addr
+                        ).await;
+                        
+                        // 创建上下文
+                        let context = Box::new(FlowContext::new_af_sensitive(
+                            local_addr, 
+                            DestinationAddr::from(remote_addr)
+                        ));
+                        
+                        // 处理连接
+                        factory_clone.handle_connection(adapter, context);
                     });
+                } else {
+                    println!("[inbound] 警告: 没有配置TCP处理器，忽略连接: {} -> {}", remote_addr, local_addr);
                 }
             }
             Ok(())
