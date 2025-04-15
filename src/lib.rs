@@ -73,7 +73,8 @@ mod ip_stack;
 use ip_stack::*;
 mod tun;
 use tun::*;
-
+mod fakeip_mapback;
+use fakeip_mapback::*;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerStatus {
     pub server_address: String,
@@ -900,39 +901,17 @@ pub async fn start_tun1_server(
      // 为UDP创建FakeIpMapBackDatagramSessionHandler
      let udp_with_mapback = Arc::new(FakeIpMapBackDatagramSessionHandler::new(
          fakeip.clone(), 
-         Arc::downgrade(&tun_handler) as Weak<dyn DatagramSessionHandler>
+         Arc::downgrade(&udp_handler) as Weak<dyn DatagramSessionHandler>
      ));
- // 创建FakeIP实例
-    let plugin_cache = data::PluginCache::new(data::PluginId(2), None);
-    let fakeip = Arc::new(FakeIp::new(
-        [198, 18], // 使用198.18.0.0/16作为FakeIP范围
-        [0; 14],  // IPv6前缀默认为0
-        plugin_cache
-    ));
-    
-    // 启动FakeIP缓存写入任务
-    tokio::spawn(fakeip::cache_writer(fakeip.clone()));
-    info!("FakeIP服务已初始化");
-
-    // 创建TCP和UDP调用链 - 使用FakeIpMapBack处理器替代原来的DnsServer和MapBack
-    
-    // 为TCP创建FakeIpMapBackStreamHandler
-    let tcp_with_mapback = Arc::new(FakeIpMapBackStreamHandler::new(
-        fakeip.clone(),
-        Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>
-    ));
-    
-    // 为UDP创建FakeIpMapBackDatagramSessionHandler
-    let udp_with_mapback = Arc::new(FakeIpMapBackDatagramSessionHandler::new(
-        fakeip.clone(), 
-        Arc::downgrade(&tun_handler) as Weak<dyn DatagramSessionHandler>
-    ));  
+ 
     // 运行IP栈
     trace!("准备启动 IP 栈任务");
     let ip_stack_task = ip_stack::run(
         tun_arc.clone(),
-        Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>,
-        Arc::downgrade(&udp_handler) as Weak<dyn DatagramSessionHandler>
+        Arc::downgrade(&tcp_with_mapback) as Weak<dyn StreamHandler>,
+        Arc::downgrade(&udp_with_mapback) as Weak<dyn DatagramSessionHandler>,
+        true,
+        Some(fakeip.clone())
     );
     
     trace!("IP 栈任务已启动，任务句柄: {:?}", ip_stack_task);
@@ -948,6 +927,19 @@ pub async fn start_tun1_server(
         }
         _ = tokio::signal::ctrl_c() => {
             println!("收到中断信号，正在关闭TUN服务器...");
+            
+            // 使用简单方法直接关闭，不尝试类型转换
+            println!("正在关闭TUN设备...");
+            drop(tun_arc); // 强制释放TUN设备资源
+            
+            // 添加退出标志
+            println!("TUN服务器正在退出...");
+            
+            // 等待一小段时间让资源清理完成
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            
+            // 强制结束进程
+            std::process::exit(0);
         }
     }
     

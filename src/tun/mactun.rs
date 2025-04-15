@@ -106,6 +106,38 @@ impl MacTun {
             _ => false,
         }
     }
+
+    // 向MacTun添加shutdown方法
+    pub fn shutdown(&self) {
+        log::info!("正在关闭TUN设备: {}", self.get_name());
+        
+        // 尝试获取设备锁并关闭
+        if let Ok(mut device) = self.device.write() {
+            // 强制关闭底层文件描述符
+            unsafe {
+                let fd = device.as_raw_fd();
+                // 使用nix关闭文件描述符
+                if let Err(e) = nix::unistd::close(fd) {
+                    log::error!("关闭TUN设备文件描述符时出错: {:?}", e);
+                } else {
+                    log::info!("成功关闭TUN设备文件描述符");
+                }
+            }
+        } else {
+            log::error!("无法获取TUN设备锁进行关闭");
+        }
+        
+        // 清空缓冲区池
+        if let Ok(mut pool) = self.rx_pool.write() {
+            pool.clear();
+        }
+        
+        if let Ok(mut pool) = self.tx_pool.write() {
+            pool.clear();
+        }
+        
+        log::info!("TUN设备资源已释放: {}", self.get_name());
+    }
 }
 
 // 辅助函数：设置文件描述符为非阻塞模式

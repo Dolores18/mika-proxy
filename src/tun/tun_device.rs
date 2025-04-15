@@ -31,6 +31,9 @@ pub struct MacTun {
     buffer_pool_rx: Mutex<Receiver<Box<Vec<u8>>>>, // 缓冲区池接收端
     buffer_pool_tx: Sender<Box<Vec<u8>>>,          // 缓冲区池发送端
     mtu: usize,
+    // 关闭信号通道
+    shutdown_tx: Sender<()>,           // 关闭信号发送端
+    shutdown_rx: Mutex<Receiver<()>>,  // 关闭信号接收端
 }
 
 impl MacTun {
@@ -72,6 +75,8 @@ impl MacTun {
         let (rx_tx, rx_rx) = mpsc::channel::<Buffer>(1024);
         let (tx_tx, tx_rx) = mpsc::channel::<Vec<u8>>(1024);
         let (buffer_pool_tx, buffer_pool_rx) = mpsc::channel::<Box<Vec<u8>>>(1024);
+        // 创建关闭信号通道
+        let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>(1);
     
         let device_arc = Arc::new(async_device);
     
@@ -88,6 +93,8 @@ impl MacTun {
             buffer_pool_rx: Mutex::new(buffer_pool_rx),
             buffer_pool_tx,
             mtu: mtu_val,
+            shutdown_tx,
+            shutdown_rx: Mutex::new(shutdown_rx),
         };
     
         // 如果支持IPv6，配置IPv6地址
@@ -97,10 +104,12 @@ impl MacTun {
     
         // 启动后台读写任务
         let rx_tx_clone = mac_tun.rx_tx.clone();
-        tokio::spawn(Self::read_loop(device_arc.clone(), rx_tx_clone, mtu_val));
+        let shutdown_rx1 = mac_tun.shutdown_rx.lock().unwrap().resubscribe();
+        tokio::spawn(Self::read_loop(device_arc.clone(), rx_tx_clone, mtu_val, shutdown_rx1));
         
         // 直接传递tx_rx的所有权，不再尝试克隆
-        tokio::spawn(Self::write_loop(device_arc.clone(), tx_rx));
+        let shutdown_rx2 = mac_tun.shutdown_rx.lock().unwrap().resubscribe();
+        tokio::spawn(Self::write_loop(device_arc.clone(), tx_rx, shutdown_rx2));
     
         // 预填充缓冲区池
         let buffer_pool_tx_clone = mac_tun.buffer_pool_tx.clone();
@@ -115,62 +124,108 @@ impl MacTun {
     
         Ok(mac_tun)
     }
-    
-    /// 获取TUN设备名称
-    pub fn get_name(&self) -> &str {
-        &self.name
-    }
-
-    /// 获取TUN设备IP地址
-    pub fn get_address(&self) -> Ipv4Addr {
-        self.address
-    }
 
     // 读取循环 - 从TUN设备读取数据并发送到通道
-    async fn read_loop(device: Arc<AsyncFd<TunDevice>>, tx: Sender<Buffer>, mtu: usize) {
+    async fn read_loop(
+        device: Arc<AsyncFd<TunDevice>>, 
+        tx: Sender<Buffer>, 
+        mtu: usize,
+        mut shutdown: Receiver<()>
+    ) {
         let mut buf = vec![0u8; mtu];
         
         loop {
-            let fd = match device.readable().await {
-                Ok(_) => device.get_ref().as_raw_fd(),
-                Err(_) => continue,
-            };
+            // 检查关闭信号
+            if let Ok(Some(_)) = shutdown.try_recv().map_err(|_| ()) {
+                info!("读取循环接收到关闭信号，正在退出");
+                break;
+            }
             
-            // 使用nix直接操作文件描述符
-            match read(fd, &mut buf) {
-                Ok(n) if n > 0 => {
-                    let packet = Buffer::from(&buf[..n]);
-                    let _ = tx.send(packet).await;
+            // 使用tokio::select等待可读性或关闭信号
+            tokio::select! {
+                // 等待设备可读
+                readable = device.readable() => {
+                    match readable {
+                        Ok(_) => {
+                            let fd = device.get_ref().as_raw_fd();
+                            // 使用nix直接操作文件描述符
+                            match read(fd, &mut buf) {
+                                Ok(n) if n > 0 => {
+                                    let packet = Buffer::from(&buf[..n]);
+                                    // 使用try_send代替send避免在关闭时阻塞
+                                    if tx.try_send(packet).is_err() {
+                                        // 如果发送失败，可能是接收端已关闭
+                                        break;
+                                    }
+                                }
+                                Ok(_) => continue,
+                                Err(e) if e == nix::errno::Errno::EAGAIN => continue,
+                                Err(e) => {
+                                    eprintln!("Read error: {:?}", e);
+                                    break;
+                                }
+                            }
+                        },
+                        Err(_) => continue,
+                    }
                 }
-                Ok(_) => continue,
-                Err(e) if e == nix::errno::Errno::EAGAIN => continue,
-                Err(e) => {
-                    eprintln!("Read error: {:?}", e);
+                // 等待关闭信号
+                _ = shutdown.recv() => {
+                    info!("读取循环接收到关闭信号，正在退出");
                     break;
                 }
             }
         }
+        info!("TUN读取循环已退出");
     }
 
     // 写入循环同样修改
-    async fn write_loop(device: Arc<AsyncFd<TunDevice>>, mut rx: Receiver<Vec<u8>>) {
-        while let Some(buf) = rx.recv().await {
-            let fd = match device.writable().await {
-                Ok(_) => device.get_ref().as_raw_fd(),
-                Err(_) => continue,
+    async fn write_loop(
+        device: Arc<AsyncFd<TunDevice>>, 
+        mut rx: Receiver<Vec<u8>>,
+        mut shutdown: Receiver<()>
+    ) {
+        loop {
+            // 使用tokio::select等待数据或关闭信号
+            let buf = tokio::select! {
+                // 等待接收数据
+                Some(buf) = rx.recv() => buf,
+                // 等待关闭信号
+                _ = shutdown.recv() => {
+                    info!("写入循环接收到关闭信号，正在退出");
+                    break;
+                }
             };
             
-            // 使用nix直接操作文件描述符
-            match write(fd, &buf) {
-                Ok(n) => {
-                    if n < buf.len() {
-                        eprintln!("Partial write: {}/{}", n, buf.len());
+            // 使用tokio::select等待可写性或关闭信号
+            tokio::select! {
+                // 等待设备可写
+                writable = device.writable() => {
+                    match writable {
+                        Ok(_) => {
+                            let fd = device.get_ref().as_raw_fd();
+                            // 使用nix直接操作文件描述符
+                            match write(fd, &buf) {
+                                Ok(n) => {
+                                    if n < buf.len() {
+                                        eprintln!("Partial write: {}/{}", n, buf.len());
+                                    }
+                                }
+                                Err(e) if e == nix::errno::Errno::EAGAIN => continue,
+                                Err(e) => eprintln!("Write error: {:?}", e),
+                            }
+                        },
+                        Err(_) => continue,
                     }
                 }
-                Err(e) if e == nix::errno::Errno::EAGAIN => continue,
-                Err(e) => eprintln!("Write error: {:?}", e),
+                // 等待关闭信号
+                _ = shutdown.recv() => {
+                    info!("写入循环接收到关闭信号，正在退出");
+                    break;
+                }
             }
         }
+        info!("TUN写入循环已退出");
     }
     
     // 获取空闲缓冲区
@@ -188,6 +243,16 @@ impl MacTun {
     async fn return_buffer(&self, buf: Box<Vec<u8>>) {
         // 如果池未满，将缓冲区放回池中
         let _ = self.buffer_pool_tx.send(buf).await;
+    }
+
+    /// 获取TUN设备名称
+    pub fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    /// 获取TUN设备IP地址
+    pub fn get_address(&self) -> Ipv4Addr {
+        self.address
     }
 }
 
@@ -296,5 +361,20 @@ impl Tun for MacTun {
                 let _ = Box::from_raw(data_ptr);
             }
         }
+    }
+}
+
+// 扩展Tun特质，添加shutdown方法
+pub trait ShutdownableTun: Tun {
+    // 关闭TUN设备
+    fn shutdown(&self);
+}
+
+// 为MacTun实现ShutdownableTun特质
+impl ShutdownableTun for MacTun {
+    fn shutdown(&self) {
+        info!("正在关闭TUN设备: {}", self.name);
+        // 发送关闭信号，忽略错误（如果接收端已关闭）
+        let _ = self.shutdown_tx.try_send(());
     }
 }
