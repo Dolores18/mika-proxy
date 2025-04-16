@@ -2,8 +2,9 @@
 [servers]
 # 可以添加多个服务器地址
 addresses = [
+   "107.174.218.153:1080", 
     "47.79.39.75:1080",
-    "107.174.218.153:1080",   
+      
     "[2401:b60:16:db::]:1080"
    
 ]
@@ -32,8 +33,8 @@ ss_key = "JtivfX27TuAkUkfgFXGuEQ=="
 listen_addr_v4 = "127.0.0.1:1081"
 listen_addr_v6 = "[::]:1081"
 # UDP监听地址
-udp_listen_addr_v4 = "127.0.0.1:1083"
-udp_listen_addr_v6 = "[::]:1083"
+udp_listen_addr_v4 = "127.0.0.1:1085"
+udp_listen_addr_v6 = "[::]:1085"
 # GeoIP数据库路径
 geoip_db_path = "GeoLite2-Country.mmdb"
 

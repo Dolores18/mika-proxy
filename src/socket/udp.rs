@@ -27,8 +27,8 @@ fn create_socket_v4(
     )?;
     prepare_socket(&socket)?;
     if remote_ip_indicator.is_loopback() {
-        println!("🌹udp客户端使用测试IPv4 绑定本地端口: {}", 36988);
-        socket.bind(&SocketAddrV4::new(Ipv4Addr::LOCALHOST, 36988).into())?
+        println!("🌹udp客户端使用测试IPv4 绑定随机端口");
+        socket.bind(&SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0).into())?
     } else {
         bind_v4(&mut socket)?
     };

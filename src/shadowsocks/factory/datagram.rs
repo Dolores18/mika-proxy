@@ -15,6 +15,24 @@ where
     pub(super) crypto_phantom: std::marker::PhantomData<C>,
 }
 
+impl<C: ShadowCrypto> ShadowsocksDatagramSessionFactory<C>
+where
+    [(); C::KEY_LEN]:,
+{
+    /// 创建一个新的Shadowsocks数据报会话工厂
+    ///
+    /// # 参数
+    /// * `key` - Shadowsocks加密密钥
+    /// * `next` - 下一级数据报会话工厂的弱引用
+    pub fn new(key: [u8; C::KEY_LEN], next: Weak<dyn DatagramSessionFactory>) -> Self {
+        Self {
+            key: Arc::new(key),
+            next,
+            crypto_phantom: std::marker::PhantomData,
+        }
+    }
+}
+
 #[async_trait]
 impl<C: ShadowCrypto> DatagramSessionFactory for ShadowsocksDatagramSessionFactory<C>
 where

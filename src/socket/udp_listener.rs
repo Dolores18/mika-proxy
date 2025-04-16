@@ -5,6 +5,7 @@ use std::sync::{Arc, Weak};
 use std::task::{ready, Context, Poll};
 
 use flume::{bounded, SendError};
+use socket2::Socket;
 
 use crate::flow::*;
 
@@ -13,8 +14,31 @@ pub fn listen_udp(
     addr: impl ToSocketAddrs + Send + 'static,
 ) -> io::Result<tokio::task::JoinHandle<()>> {
     let mut session_map = BTreeMap::new();
-    let listener = std::net::UdpSocket::bind(addr)?;
-    listener.set_nonblocking(true)?;
+    
+    // 获取地址
+    let addr = addr.to_socket_addrs()?.next().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "无效的UDP监听地址")
+    })?;
+    
+    // 使用socket2创建socket，以便设置更多选项
+    let socket = Socket::new(
+        if addr.is_ipv4() { socket2::Domain::IPV4 } else { socket2::Domain::IPV6 },
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    
+    // 设置重用地址和端口选项
+    socket.set_reuse_address(true)?;
+    #[cfg(not(windows))]
+    socket.set_reuse_port(true)?;
+    
+    // 设置非阻塞模式
+    socket.set_nonblocking(true)?;
+    
+    // 绑定地址并转换为标准库socket
+    socket.bind(&addr.into())?;
+    let listener = socket.into();
+    
     Ok(tokio::spawn(async move {
         let listener = Arc::new(
             tokio::net::UdpSocket::from_std(listener)

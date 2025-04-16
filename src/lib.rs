@@ -16,6 +16,7 @@ mod shadowsocks;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use shadowsocks::crypto::*;
 use shadowsocks::factory::stream::*;
+use shadowsocks::factory::datagram::*;
 mod socks5;
 use socks5::*;
 mod system_resolver;
@@ -23,7 +24,7 @@ use log::{error, info, trace};
 use std::panic;
 use system_resolver::*;
 mod redirect;
-use redirect::{StreamRedirectHandler, StreamRedirectOutboundFactory};
+use redirect::{StreamRedirectHandler, StreamRedirectOutboundFactory, DatagramSessionRedirectFactory};
 
 use std::collections::HashSet;
 pub mod fallback;
@@ -44,6 +45,10 @@ pub use socket::*;
 // 添加 socks5_udp 模块
 mod socks5_udp;
 use socks5_udp::Socks5UdpHandler;
+
+// 添加 socks5_associate 模块
+mod socks5_associate;
+use socks5_associate::Socks5UdpAssociateHandler;
 
 // 添加 dns_server 模块
 mod dns_server;
@@ -534,8 +539,17 @@ pub async fn start_udp_server(
     // 创建系统解析器
     let resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
 
-    // 创建统计对象
+    // 统计对象
     let stat = forward::StatHandle::default();
+    
+    // 获取代理地址
+    let server_config_clone = Arc::new(server_config.clone());
+    let proxy_addr = server_config_clone.create_fixed_adrr();
+    
+    // 获取Shadowsocks密钥
+    let psd = &app_config.features.ss_key;
+    let key = BASE64.decode(psd).expect("Failed to decode");
+    let key: [u8; 16] = key.try_into().expect("Invalid key length");
 
     // 创建 UDP 出站工厂
     let socket_outbound_factory = Arc::new(SocketOutboundFactory {
@@ -544,9 +558,22 @@ pub async fn start_udp_server(
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
 
+    // 创建UDP重定向工厂
+    let udp_redirect_factory = Arc::new(DatagramSessionRedirectFactory {
+        remote_peer: proxy_addr.clone(),
+        next: Arc::downgrade(&socket_outbound_factory) as Weak<dyn DatagramSessionFactory>,
+    });
+
+    // 创建UDP SS工厂
+    let ss_udp_factory = Arc::new(ShadowsocksDatagramSessionFactory::<Aes128Gcm>::new(
+        key,
+        Arc::downgrade(&udp_redirect_factory) as Weak<dyn DatagramSessionFactory>,
+    ));
+
+
     // 创建 UDP 转发处理器
     let datagram_handler = Arc::new(forward::DatagramForwardHandler {
-        outbound: Arc::downgrade(&socket_outbound_factory) as Weak<dyn DatagramSessionFactory>,
+        outbound: Arc::downgrade(&ss_udp_factory) as Weak<dyn DatagramSessionFactory>,
         stat: stat,
     });
 
@@ -567,18 +594,37 @@ pub async fn start_udp_server(
     );
 
     // 创建 UDP 监听器，使用 SOCKS5 UDP 处理器
-    let handle_v4 = listen_udp(
+    let udp_handle_v4 = listen_udp(
         Arc::downgrade(&socks5_udp_handler) as Weak<dyn DatagramSessionHandler>,
-        udp_listen_addr_v4,
+        udp_listen_addr_v4.clone(),
     )?;
     
-    let handle_v6 = listen_udp(
+    let udp_handle_v6 = listen_udp(
         Arc::downgrade(&socks5_udp_handler) as Weak<dyn DatagramSessionHandler>,
-        udp_listen_addr_v6,
+        udp_listen_addr_v6.clone(),
     )?;
 
-    // 等待监听器完成
-    tokio::try_join!(handle_v4, handle_v6)?;
+    // 创建UDP关联处理器，处理SOCKS5 UDP ASSOCIATE命令
+    let socks5_associate_handler = Arc::new(Socks5UdpAssociateHandler::new(
+        None,
+        Arc::downgrade(&socks5_udp_handler) as Weak<dyn DatagramSessionHandler>,
+        udp_listen_addr_v4.parse().unwrap(), // 使用UDP监听地址作为中继地址
+    ));
+
+    // 创建TCP监听器，处理SOCKS5 UDP ASSOCIATE命令
+    println!("Starting SOCKS5 UDP ASSOCIATE handler on TCP port...");
+    let tcp_handle_v4 = listen_tcp(
+        Arc::downgrade(&socks5_associate_handler) as Weak<dyn StreamHandler>,
+        udp_listen_addr_v4.clone(),
+    )?;
+    
+    let tcp_handle_v6 = listen_tcp(
+        Arc::downgrade(&socks5_associate_handler) as Weak<dyn StreamHandler>,
+        udp_listen_addr_v6.clone(),
+    )?;
+
+    // 等待所有监听器完成
+    tokio::try_join!(udp_handle_v4, udp_handle_v6, tcp_handle_v4, tcp_handle_v6)?;
 
     Ok(())
 }
@@ -911,15 +957,27 @@ pub async fn start_tun1_server(
     });
 
     // 创建UDP socket出站工厂
-    let socket_outbound_factory = Arc::new(SocketOutboundFactory {
+    let udp_socket_outbound_factory = Arc::new(SocketOutboundFactory {
         resolver: Arc::downgrade(&system_resolver),
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
 
-    // 创建 UDP 转发处理器
+    // 创建UDP重定向工厂，使用与TCP相同的代理地址
+    let udp_redirect_factory = Arc::new(DatagramSessionRedirectFactory {
+        remote_peer: proxy_addr.clone(),
+        next: Arc::downgrade(&udp_socket_outbound_factory) as Weak<dyn DatagramSessionFactory>,
+    });
+
+    // 创建UDP SS工厂，连接到重定向工厂而不是直接连接到socket工厂
+    let ss_udp_factory = Arc::new(ShadowsocksDatagramSessionFactory::<Aes128Gcm>::new(
+        key.clone(),
+        Arc::downgrade(&udp_redirect_factory) as Weak<dyn DatagramSessionFactory>,
+    ));
+
+    // 创建 UDP 转发处理器，使用SS加密工厂
     let datagram_handler = Arc::new(forward::DatagramForwardHandler {
-        outbound: Arc::downgrade(&socket_outbound_factory) as Weak<dyn DatagramSessionFactory>,
+        outbound: Arc::downgrade(&ss_udp_factory) as Weak<dyn DatagramSessionFactory>,
         stat: stat,
     });
 
