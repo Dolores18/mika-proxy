@@ -3,7 +3,7 @@ use std::task::Poll;
 
 use super::*;
 use crate::flow::*;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 pub(super) struct IpStackDatagramSession {
     pub(super) stack: Arc<Mutex<IpStackInner>>,
     pub(super) local_endpoint: SocketAddr,
@@ -94,7 +94,13 @@ impl MultiplexedDatagramSession for IpStackDatagramSession {
             }
             (SocketAddr::V6(dst_v6), HostName::Ip(IpAddr::V6(src_ip))) => {
                 println!("  构建IPv6数据包: {}:{} -> {}", src_ip, src.port, dst_v6);
-                let src_ip: Ipv6Address = (*src_ip).into();
+                // 使用一个固定的IPv6地址作为源地址，类似于IPv4处理方式
+                let src_ip: Ipv6Address = Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 1).into();
+                
+                println!("🌹udp客户端测试用IPv6 发送数据包: {}", src_ip);
+                println!("🌹本地端口是: {}", self.local_endpoint.port());
+                
+                println!("  准备调用ip_buf.consume");
                 ip_buf.consume(buf.len() + 48, |ip_buf| {
                     let mut ip_packet = Ipv6Packet::new_unchecked(ip_buf);
                     ip_packet.set_version(6);
@@ -103,15 +109,24 @@ impl MultiplexedDatagramSession for IpStackDatagramSession {
                     ip_packet.set_dst_addr((*dst_v6.ip()).into());
                     ip_packet.set_src_addr(src_ip);
                     ip_packet.set_payload_len(8 + payload_len);
-                    ip_packet.set_flow_label(dst_v6.flowinfo());
+                    
+                    // 设置流标签，如果可用
+                    let flow_info = dst_v6.flowinfo();
+                    println!("  设置IPv6流标签: {}", flow_info);
+                    ip_packet.set_flow_label(flow_info);
+                    
                     let mut udp_packet = UdpPacket::new_unchecked(ip_packet.payload_mut());
                     udp_packet.set_dst_port(self.local_endpoint.port());
                     udp_packet.set_src_port(src.port);
                     udp_packet.set_len(8 + payload_len);
                     udp_packet.payload_mut()[..buf.len()].copy_from_slice(&buf);
+                    
+                    // 计算UDP校验和
                     udp_packet.fill_checksum(&src_ip.into(), &(*dst_v6.ip()).into());
+                    
                     println!("✅ IPv6数据包已构建完成，长度: {}", 40 + 8 + payload_len);
                 });
+                println!("  ip_buf.consume已完成（回调返回）");
             }
             // Ignore unmatched IP version
             _ => {

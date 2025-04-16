@@ -193,25 +193,87 @@ impl ServerConfig {
             let config = server_config_clone.clone();
             Box::pin(async move {
                 let addr = config.get_address().await;
-    
-                // 使用倒数第一个冒号分离IP和端口
-                let parts: Vec<&str> = addr.rsplitn(2, ':').collect();
-                if parts.len() != 2 {
-                    panic!("无效的代理地址格式: {}", addr);
+                
+                // 判断是IPv4还是IPv6地址格式
+                if addr.starts_with('[') {
+                    // IPv6格式: [ipv6_addr]:port
+                    let end_bracket = addr.rfind(']')
+                        .unwrap_or_else(|| panic!("IPv6地址格式错误，缺少结束括号: {}", addr));
+                    
+                    let ip = &addr[1..end_bracket]; // 去掉中括号
+                    let port = addr[end_bracket+2..] // +2跳过 "]:""
+                        .parse()
+                        .unwrap_or_else(|_| panic!("无效的端口号: {}", &addr[end_bracket+2..]));
+                    
+                    println!("代理地址(IPv6): {}:{}", ip, port);
+                    DestinationAddr {
+                        host: HostName::Ip(
+                            IpAddr::from_str(ip).unwrap_or_else(|_| panic!("无法解析IPv6地址: {}", ip)),
+                        ),
+                        port,
+                    }
+                } else {
+                    // IPv4格式: ipv4_addr:port
+                    let parts: Vec<&str> = addr.rsplitn(2, ':').collect();
+                    if parts.len() != 2 {
+                        panic!("无效的代理地址格式: {}", addr);
+                    }
+                    
+                    let ip = parts[1]; // 倒数第一个部分是IP
+                    let port = parts[0]
+                        .parse()
+                        .unwrap_or_else(|_| panic!("无效的端口号: {}", parts[0]));
+                    
+                    println!("代理地址(IPv4): {}:{}", ip, port);
+                    DestinationAddr {
+                        host: HostName::Ip(
+                            IpAddr::from_str(ip).unwrap_or_else(|_| panic!("无法解析IPv4地址: {}", ip)),
+                        ),
+                        port,
+                    }
                 }
-    
-                let ip = parts[1]; // 倒数第一个部分是IP
-                let port = parts[0]
-                    .parse()
-                    .unwrap_or_else(|_| panic!("无效的端口号: {}", parts[0]));
-    
-                println!("代理地址: {}:{}", ip, port);
-                DestinationAddr {
-                    host: HostName::Ip(
-                        IpAddr::from_str(ip).unwrap_or_else(|_| panic!("无法解析IP地址: {}", ip)),
-                    ),
-                    port,
+            })
+        }
+    }
+
+    // 新增专门处理IPv6地址的方法
+    pub fn create_fixed_ipv6_adrr(&self) -> impl Fn() -> Pin<Box<dyn Future<Output = Option<DestinationAddr>> + Send>> + Clone {
+        let server_config_clone = self.clone();
+        move || {
+            let config = server_config_clone.clone();
+            Box::pin(async move {
+                // 获取所有地址
+                let all_addresses = config.get_all_addresses().await;
+                
+                // 筛选IPv6地址
+                for addr in all_addresses {
+                    if addr.starts_with('[') {
+                        // 是IPv6地址格式
+                        let end_bracket = addr.rfind(']')
+                            .unwrap_or_else(|| panic!("IPv6地址格式错误，缺少结束括号: {}", addr));
+                        
+                        let ip = &addr[1..end_bracket]; // 去掉中括号
+                        let port = addr[end_bracket+2..] // +2跳过 "]:""
+                            .parse()
+                            .unwrap_or_else(|_| panic!("无效的端口号: {}", &addr[end_bracket+2..]));
+                        
+                        println!("找到IPv6代理地址: {}:{}", ip, port);
+                        
+                        // 尝试解析IP地址
+                        if let Ok(ip_addr) = IpAddr::from_str(ip) {
+                            if ip_addr.is_ipv6() {
+                                return Some(DestinationAddr {
+                                    host: HostName::Ip(ip_addr),
+                                    port,
+                                });
+                            }
+                        }
+                    }
                 }
+                
+                // 没有找到IPv6地址
+                println!("没有找到可用的IPv6代理地址");
+                None
             })
         }
     }

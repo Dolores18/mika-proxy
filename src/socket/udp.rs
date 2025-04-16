@@ -232,7 +232,7 @@ impl<
         let port = dst.port;
         
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-        println!("🕒 UDPSocket发送数据包，时间: {}s {}ms", now.as_secs(), now.subsec_millis());
+        //println!("🕒 UDPSocket发送数据包，时间: {}s {}ms", now.as_secs(), now.subsec_millis());
 
         // 检查是否有存储的接收时间，如果有且是DNS响应包，则计算耗时
         if let Some(receive_time) = self.last_receive_time {
@@ -243,7 +243,7 @@ impl<
                 // 检查是否与上次请求ID匹配
                 if Some(response_id) == self.last_request_id {
                     let elapsed = receive_time.elapsed();
-                    println!("⏱️ 从接收请求到发送响应的耗时: {:?}", elapsed);
+                   // println!("⏱️ 从接收请求到发送响应的耗时: {:?}", elapsed);
                     self.last_receive_time = None;
                     self.last_request_id = None;
                 }
@@ -261,10 +261,12 @@ impl<
         match dst.host {
             HostName::Ip(IpAddr::V4(v4)) => {
                 let test_ip = Ipv4Addr::new(223,5,5,5);
-                println!("🌹udp客户端使用测试IPv4 发送数据包: {}", test_ip);
-                self.tx_buf = Some((ResolvingAddr::Ready((Some(test_ip), None, port)), buf));
+                println!("🌹udp客户端使用IPv4 发送数据包: {}", v4);
+                self.tx_buf = Some((ResolvingAddr::Ready((Some(v4), None, port)), buf));
             }
             HostName::Ip(IpAddr::V6(v6)) => {
+                println!("🌹udp客户端使用ipv6发送数据包:{}", v6);
+
                 self.tx_buf = Some((ResolvingAddr::Ready((None, Some(v6), port)), buf));
             }
             HostName::DomainName(domain) => {

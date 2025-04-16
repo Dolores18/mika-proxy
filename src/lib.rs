@@ -74,6 +74,10 @@ use ip_stack::*;
 mod tun;
 use tun::*;
 
+// 添加dual_stack_factory模块
+mod dual_stack_factory;
+use dual_stack_factory::DualStackOutboundFactory;
+
 // 添加fakeip_mapback模块
 mod fakeip_mapback;
 pub use fakeip_mapback::{FakeIpMapBackStreamHandler, FakeIpMapBackDatagramSessionHandler};
@@ -832,6 +836,18 @@ pub async fn start_tun1_server(
     // 修改代理地址创建方式
     let server_config_clone = Arc::new(server_config.clone());
     let proxy_addr = server_config_clone.create_fixed_adrr();
+    
+    // 尝试获取IPv6代理地址，使用await而不是block_on
+    let ipv6_factory_creator = server_config_clone.create_fixed_ipv6_adrr();
+    let ipv6_dest_addr = ipv6_factory_creator().await;
+    
+    println!("代理地址信息:");
+    println!("- IPv4代理: 已配置");
+    if let Some(addr) = &ipv6_dest_addr {
+        println!("- IPv6代理: 已配置，地址: {:?}", addr);
+    } else {
+        println!("- IPv6代理: 未配置或不可用");
+    }
 
     // 创建 Shadowsocks 工厂，使用配置中的密钥
     let psd = &app_config.features.ss_key;
@@ -845,26 +861,56 @@ pub async fn start_tun1_server(
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
 
-    // 创建重定向工厂
-    let redirect_factory = Arc::new(StreamRedirectOutboundFactory {
+    // 创建IPv4重定向工厂
+    let ipv4_redirect_factory = Arc::new(StreamRedirectOutboundFactory {
         remote_peer: proxy_addr.clone(),
         next: Arc::downgrade(&socket_outbound_factory) as Weak<dyn StreamOutboundFactory>,
     });
-
-    // 创建SS工厂
-    let ss_factory = Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
-        key,
-        Arc::downgrade(&redirect_factory) as Weak<dyn StreamOutboundFactory>,
+    
+    // 创建IPv4 SS工厂
+    let ss_ipv4_factory = Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
+        key.clone(),
+        Arc::downgrade(&ipv4_redirect_factory) as Weak<dyn StreamOutboundFactory>,
+    ));
+    
+    // 创建IPv6 SS工厂（如果有可用的IPv6地址）
+    let ss_ipv6_factory = if let Some(ipv6_addr) = ipv6_dest_addr {
+        // 创建一个内部函数，每次返回相同的地址
+        let ipv6_addr_clone = ipv6_addr.clone();
+        let ipv6_fn = move || {
+            let addr = ipv6_addr_clone.clone();
+            Box::pin(async move { addr })
+        };
+        
+        // 创建IPv6重定向工厂
+        let ipv6_redirect_factory = Arc::new(StreamRedirectOutboundFactory {
+            remote_peer: ipv6_fn,
+            next: Arc::downgrade(&socket_outbound_factory) as Weak<dyn StreamOutboundFactory>,
+        });
+        
+        // 创建IPv6 SS工厂
+        Some(Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
+            key,
+            Arc::downgrade(&ipv6_redirect_factory) as Weak<dyn StreamOutboundFactory>,
+        )))
+    } else {
+        None
+    };
+    
+    // 创建双栈地址选择器工厂
+    let dual_stack_factory = Arc::new(DualStackOutboundFactory::new(
+        ss_ipv4_factory,
+        ss_ipv6_factory
     ));
     
     // 创建 StreamForwardHandler 实例
     let tcp_handler = Arc::new(forward::StreamForwardHandler {
-        outbound: Arc::downgrade(&ss_factory) as Weak<dyn StreamOutboundFactory>,
+        outbound: Arc::downgrade(&dual_stack_factory) as Weak<dyn StreamOutboundFactory>,
         request_timeout: 10000,
         stat: stat.clone(),
     });
 
-
+    // 创建UDP socket出站工厂
     let socket_outbound_factory = Arc::new(SocketOutboundFactory {
         resolver: Arc::downgrade(&system_resolver),
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
@@ -885,7 +931,7 @@ pub async fn start_tun1_server(
     let plugin_cache = data::PluginCache::new(data::PluginId(2), None);
     let fakeip = Arc::new(FakeIp::new(
         [198, 18], // 使用198.18.0.0/16作为FakeIP范围
-        [0; 14],  // IPv6前缀默认为0
+        [0xfc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],  // 使用fc00::/18作为IPv6前缀
         plugin_cache
     ));
     

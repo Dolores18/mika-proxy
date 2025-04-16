@@ -1,11 +1,11 @@
 use hickory_proto::{
     op::{Message, ResponseCode},
-    rr::{RData, Record, rdata::A},
+    rr::{RData, Record, rdata::{A, AAAA}, RecordType},
 };
 use log::{debug, trace};
 use std::error::Error;
 use std::fmt;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::fakeip::FakeIp;
 use crate::flow::Resolver;
@@ -63,37 +63,83 @@ pub async fn exchange_with_resolver<'a>(
         res.set_edns(edns);
     }
 
-    // 使用FakeIp解析域名
-    match resolver.resolve_ipv4(host.clone()).await {
-        Ok(ips) if !ips.is_empty() => {
-            let ip = Ipv4Addr::from(ips[0]);
-            let rdata = RData::A(A(ip));
+    // 获取查询类型
+    let query_type = req.query().map(|q| q.query_type()).unwrap_or(RecordType::A);
+    println!("🔍 查询类型: {:?}", query_type);
 
-            println!("🔍 FakeIP分配成功: {} => {}", host, ip);
+    // 检查是A记录(IPv4)查询还是AAAA记录(IPv6)查询
+    if query_type == RecordType::A {
+        // 处理IPv4 (A记录) 查询
+        match resolver.resolve_ipv4(host.clone()).await {
+            Ok(ips) if !ips.is_empty() => {
+                let ip = Ipv4Addr::from(ips[0]);
+                let rdata = RData::A(A(ip));
 
-            let records = vec![Record::from_rdata(
-                name.clone(),
-                DEFAULT_DNS_SERVER_TTL,
-                rdata,
-            )];
+                println!("🔍 FakeIP分配成功(IPv4): {} => {}", host, ip);
 
-            res.set_response_code(ResponseCode::NoError);
-            res.set_answer_count(records.len() as u16);
-            res.add_answers(records);
+                let records = vec![Record::from_rdata(
+                    name.clone(),
+                    DEFAULT_DNS_SERVER_TTL,
+                    rdata,
+                )];
 
-            trace!("FakeIP DNS response: {:?} -> {:?}", name, ip);
-            Ok(res)
+                res.set_response_code(ResponseCode::NoError);
+                res.set_answer_count(records.len() as u16);
+                res.add_answers(records);
+
+                trace!("FakeIP DNS response (IPv4): {:?} -> {:?}", name, ip);
+                Ok(res)
+            }
+            Ok(_) => {
+                // 没有找到IP地址
+                println!("🔍 FakeIP分配失败(IPv4): {} => 无可用IP", host);
+                res.set_response_code(ResponseCode::NXDomain);
+                Ok(res)
+            }
+            Err(e) => {
+                println!("🔍 FakeIP解析错误(IPv4): {} => {:?}", host, e);
+                debug!("DNS resolve error (IPv4): {:?}", e);
+                Err(DNSError::QueryFailed(format!("{:?}", e)))
+            }
         }
-        Ok(_) => {
-            // 没有找到IP地址
-            println!("🔍 FakeIP分配失败: {} => 无可用IP", host);
-            res.set_response_code(ResponseCode::NXDomain);
-            Ok(res)
+    } else if query_type == RecordType::AAAA {
+        // 处理IPv6 (AAAA记录) 查询
+        match resolver.resolve_ipv6(host.clone()).await {
+            Ok(ips) if !ips.is_empty() => {
+                let ip = Ipv6Addr::from(ips[0]);
+                let rdata = RData::AAAA(AAAA(ip));
+
+                println!("🔍 FakeIP分配成功(IPv6): {} => {}", host, ip);
+
+                let records = vec![Record::from_rdata(
+                    name.clone(),
+                    DEFAULT_DNS_SERVER_TTL,
+                    rdata,
+                )];
+
+                res.set_response_code(ResponseCode::NoError);
+                res.set_answer_count(records.len() as u16);
+                res.add_answers(records);
+
+                trace!("FakeIP DNS response (IPv6): {:?} -> {:?}", name, ip);
+                Ok(res)
+            }
+            Ok(_) => {
+                // 没有找到IP地址
+                println!("🔍 FakeIP分配失败(IPv6): {} => 无可用IP", host);
+                res.set_response_code(ResponseCode::NXDomain);
+                Ok(res)
+            }
+            Err(e) => {
+                println!("🔍 FakeIP解析错误(IPv6): {} => {:?}", host, e);
+                debug!("DNS resolve error (IPv6): {:?}", e);
+                Err(DNSError::QueryFailed(format!("{:?}", e)))
+            }
         }
-        Err(e) => {
-            println!("🔍 FakeIP解析错误: {} => {:?}", host, e);
-            debug!("DNS resolve error: {:?}", e);
-            Err(DNSError::QueryFailed(format!("{:?}", e)))
-        }
+    } else {
+        // 对于其他类型的查询，返回NXDOMAIN
+        println!("🔍 不支持的查询类型: {:?}", query_type);
+        res.set_response_code(ResponseCode::NXDomain);
+        Ok(res)
     }
 }

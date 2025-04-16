@@ -92,12 +92,12 @@ impl TunDatagramSession {
             while let Some(mut pkt) = tx_receiver.recv().await {
                 // 直接使用数据包中的目标地址，不再查找映射
                 let dst_addr = pkt.dst_addr;
-                
+                /* 
                 // 设置DNS服务器地址为1.1.1.1:53（如果需要）
                 if pkt.src_addr.port() == 53 {
                     pkt.src_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53);
                 }
-                
+                */
                 println!("🍎UDP下行数据包(从服务器到客户端): {}→{}, 大小: {}", 
                          pkt.src_addr, dst_addr, pkt.data.len());
                 
@@ -188,9 +188,10 @@ impl TunDatagramSession {
                                 .unwrap_or_else(|| "未知域名".to_string());
                                 
                             println!("🔍 DNS查询域名: {}", query_domain);
-                            
+                             /*
                             if msg.query().map(|q| q.query_type())
                                 == Some(RecordType::AAAA)
+                           
                             {
                                 println!("🔍 不支持AAAA查询，拒绝解析: {}", query_domain);
                                 let resp = hickory_proto::op::Message::error_msg(
@@ -201,7 +202,10 @@ impl TunDatagramSession {
                                 send_response(resp, &pkt).await;
                                 continue 'read_packet;
                             }
-
+                            */
+                            // 获取查询类型用于日志输出
+                            let query_type = msg.query().map(|q| q.query_type());
+                            println!("🔍 DNS查询类型: {:?}", query_type);
                             let mut resp =
                                 match &resolver_dns {
                                     Some(resolver) => {
