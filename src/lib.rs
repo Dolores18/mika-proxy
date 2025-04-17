@@ -820,14 +820,13 @@ pub async fn start_tun1_server(
     info!("开始初始化 TUN 服务器");
     // 创建系统解析器
     let system_resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
-    // 初始化MacTun设备
+    // 初始化MacTun设备，使用传入的tun_name
     info!("初始化MacTun设备: {}", tun_name);
-    let tun = MacTun::new(tun_name, tun_ip, tun_netmask, mtu)?;
-    let tun_arc = Arc::new(tun);
+    let tun = tun::mactun::MacOSTun::new_with_name(tun_name)?;
     
-    info!("TUN设备已创建: {}", tun_arc.get_name());
-    info!("TUN设备IP地址: {}", tun_arc.get_address());
-       // 修改代理地址创建方式
+    info!("TUN设备已创建: {}", tun.get_name());
+    info!("TUN设备IP地址: {}", tun.get_address());
+    // 修改代理地址创建方式
     let server_config_clone = Arc::new(server_config.clone());
     let proxy_addr = server_config_clone.create_fixed_adrr();
 
@@ -882,7 +881,7 @@ pub async fn start_tun1_server(
      let plugin_cache = data::PluginCache::new(data::PluginId(2), None);
      let fakeip = Arc::new(FakeIp::new(
          [198, 18], // 使用198.18.0.0/16作为FakeIP范围
-         [0; 14],  // IPv6前缀默认为0
+         [0xfc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],  // IPv6前缀设为fc00::
          plugin_cache
      ));
      
@@ -906,8 +905,10 @@ pub async fn start_tun1_server(
  
     // 运行IP栈
     trace!("准备启动 IP 栈任务");
+    // 显式地将Arc<MacOSTun>转换为Arc<dyn Tun>
+   
     let ip_stack_task = ip_stack::run(
-        tun_arc.clone(),
+        tun,  // 直接传递 Arc<MacOSTun>，它会被隐式转换为 Arc<dyn Tun>
         Arc::downgrade(&tcp_with_mapback) as Weak<dyn StreamHandler>,
         Arc::downgrade(&udp_with_mapback) as Weak<dyn DatagramSessionHandler>,
         true,
@@ -930,7 +931,7 @@ pub async fn start_tun1_server(
             
             // 使用简单方法直接关闭，不尝试类型转换
             println!("正在关闭TUN设备...");
-            drop(tun_arc); // 强制释放TUN设备资源
+            // 不需要手动释放tun，它会自动释放
             
             // 添加退出标志
             println!("TUN服务器正在退出...");

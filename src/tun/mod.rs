@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 pub mod mactun;
 
-pub use self::mactun::MacTun;
+pub use self::mactun::MacOSTun;
 
 pub mod exchange_with_resolver;
 pub use self::exchange_with_resolver::exchange_with_resolver;
