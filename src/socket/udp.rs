@@ -341,7 +341,7 @@ impl<
                 let ascii_values: String = chunk.iter()
                     .map(|&b| if b >= 32 && b <= 126 { b as char } else { '.' })
                     .collect();
-                println!("  {:04x}: {:48} {}", i * 16, hex_values.join(" "), ascii_values);
+               // println!("  {:04x}: {:48} {}", i * 16, hex_values.join(" "), ascii_values);
             }
             
             // 记录接收到的DNS请求的时间
