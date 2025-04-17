@@ -49,6 +49,6 @@ pub trait Tun: Send + Sync {
 
     // Write
     fn get_tx_buffer(&self) -> Option<TunBufferToken>;
-    fn send(&self, buf: TunBufferToken, len: usize) -> Result<(), io::Error>;
+    fn send(&self, buf: TunBufferToken, len: usize);
     fn return_tx_buffer(&self, buf: TunBufferToken);
 }

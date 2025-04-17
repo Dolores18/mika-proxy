@@ -106,79 +106,19 @@ impl<'d> smoltcp::phy::TxToken for TxToken<'d> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        // 检查缓冲区是否存在
-        if self.0.is_none() {
-            println!("🔴错误: TxToken中缓冲区为空! Consuming a TxToken without tx buffer set");
-            // 创建一个空结果返回，避免panic
-            return f(&mut []);
-        }
-        
-        let buf = self.0.as_mut().unwrap();
-        
-        // 检查长度是否超过限制
+        let buf = self
+            .0
+            .as_mut()
+            .expect("Consuming a TxToken without tx buffer set");
         if len > buf.data.len() {
-            println!("🔴错误: 数据长度{}超过缓冲区大小{}! smoltcp cannot write a packet to a TUN interface with smaller MTU set.",
-                    len, buf.data.len());
-            
-            // 使用可用缓冲区尽可能运行函数
-            let res = f(&mut buf.data);
-            return res;
+            panic!("smoltcp cannot write a packet to a TUN interface with smaller MTU set.")
         }
-        
-        println!("✅准备将数据写入缓冲区，长度: {}", len);
         let res = f(&mut buf.data[..len]);
-        println!("🍎ip_stack与tun交互，长度: {}", len);
-        
-        // 安全地获取缓冲区并发送
-        match self.0.take() {
-            Some(buffer) => {
-                println!("✅发送数据到TUN设备，长度: {}", len);
-                // 打印缓冲区内容帮助调试
-                if len > 0 && len <= 64 {
-                    println!("✅发送数据内容(前{}字节): {:02x?}", 
-                             std::cmp::min(len, 64), 
-                             &buffer.data[..std::cmp::min(len, 64)]);
-                }
-                
-                // 发送数据到TUN设备，添加重试机制
-                const MAX_RETRIES: usize = 3;
-                let mut retry_count = 0;
-                loop {
-                    match self.1.send(buffer.clone(), len) {
-                        Ok(_) => {
-                            println!("✅数据已成功发送到TUN设备");
-                            break;
-                        },
-                        Err(e) => {
-                            if e.kind() == std::io::ErrorKind::Interrupted && retry_count < MAX_RETRIES {
-                                retry_count += 1;
-                                println!("⚠️ 发送被中断，正在进行第{}次重试", retry_count);
-                                continue;
-                            } else if e.kind() == std::io::ErrorKind::WouldBlock && retry_count < MAX_RETRIES {
-                                retry_count += 1;
-                                println!("⚠️ 发送会阻塞，正在进行第{}次重试", retry_count);
-                                // 短暂等待后重试，避免立即重试造成的资源浪费
-                                std::thread::sleep(std::time::Duration::from_millis(10));
-                                continue;
-                            } else {
-                                println!("❌ 发送到TUN设备失败: {:?}", e);
-                                if retry_count > 0 {
-                                    println!("❌ 已重试{}次，放弃发送", retry_count);
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-            },
-            None => {
-                println!("🔴错误: 尝试发送数据时缓冲区为空!");
-            }
-        }
-        
+        self.1.send(self.0.take().unwrap(), len);
         res
     }
 }
+
 
 type IpStack = Arc<Mutex<IpStackInner>>;
 
@@ -581,13 +521,7 @@ fn process_udp(
                                             tx_buf.data[..packet_len].copy_from_slice(&packet_data);
                                             
                                             // 发送数据包
-                                            match dev.tun.send(tx_buf, packet_len) {
-                                                Ok(_) => println!("✅ 成功发送IPv4 DNS响应包: {} 字节", packet_len),
-                                                Err(e) => {
-                                                    println!("❌ 发送IPv4 DNS响应包失败: {:?}", e);
-                                                    // 不再在这里尝试返回缓冲区，因为send已经消费了tx_buf
-                                                }
-                                            }
+                                            dev.tun.send(tx_buf, packet_len);
                                             
                                             // 已处理响应，直接返回
                                             return;

@@ -827,7 +827,7 @@ pub async fn start_tun1_server(
     let runtime_handle = tokio::runtime::Handle::current();
     
     // 注意：MacTun::new 不是异步函数，不需要 await
-    let tun = MacTun::new(tun_name, tun_ip, tun_netmask, mtu, runtime_handle)?;
+    let tun = MacTun::new(tun_name, tun_ip, tun_netmask, mtu).await?;
     let tun_arc = Arc::new(tun);
     
     info!("TUN设备已创建: {}", tun_arc.get_name());
