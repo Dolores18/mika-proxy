@@ -1,6 +1,6 @@
 use hickory_proto::{
     op::{Message, ResponseCode},
-    rr::{RData, Record, rdata::A},
+    rr::{RData, Record, rdata::A, RecordType},
 };
 use log::{debug, trace};
 use std::error::Error;
@@ -49,6 +49,36 @@ pub async fn exchange_with_resolver<'a>(
         .unwrap();
         
     println!("🔍 FakeIP处理DNS查询: {}", host);
+
+    // 检查查询类型是否为AAAA(IPv6地址)
+    if let Some(query) = req.query() {
+        if query.query_type() == RecordType::AAAA {
+            println!("🔍 不支持AAAA查询，返回Refused: {}", host);
+            
+            // 创建拒绝响应消息
+            let mut resp = Message::error_msg(
+                req.id(),
+                req.op_code(),
+                ResponseCode::Refused
+            );
+            
+            // 保留原始查询
+            resp.add_query(query.clone());
+            
+            // 设置适当的标志
+            resp.set_recursion_available(false);
+            resp.set_authoritative(true);
+            resp.set_recursion_desired(req.recursion_desired());
+            resp.set_checking_disabled(req.checking_disabled());
+            
+            // 复制EDNS扩展(如果有)
+            if let Some(edns) = req.extensions().clone() {
+                resp.set_edns(edns);
+            }
+            
+            return Ok(resp);
+        }
+    }
 
     // 创建响应消息
     let mut res = Message::new();

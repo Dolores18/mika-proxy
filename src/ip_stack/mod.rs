@@ -177,7 +177,7 @@ pub fn run(
     tokio::runtime::Handle::current().spawn_blocking(move || {
         while let Some(recv_buf) = tun.blocking_recv() {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-            println!("🍎ip_stack: 收到数据包，时间: {}s {}ms，长度: {}, 数据包内容(十六进制): {:02x?}", now.as_secs(), now.subsec_millis(), recv_buf.len(), recv_buf);
+            println!("🍎ip_stack: 收到数据包，时间: {}s {}ms，长度: {}", now.as_secs(), now.subsec_millis(), recv_buf.len());
             process_packet(&stack, recv_buf,dns_hijack, &resolver);
         }
     })
@@ -285,7 +285,7 @@ fn process_tcp(
     packet: Buffer,
 
 ) {
-    println!("🍎ip_stack: TCP包，数据包内容(十六进制): {:02x?}", packet);
+    println!("🍎ip_stack: TCP包，数据包内容(十六进制): {:02x?}", &packet[0..20]);
 
     
 
@@ -389,6 +389,180 @@ fn process_udp(
             // 尝试解析为DNS消息
             match hickory_proto::op::Message::from_vec(payload) {
                 Ok(request_msg) => {
+                    // 获取查询的域名
+                    let query_domain = request_msg.query()
+                        .map(|q| q.name().to_ascii())
+                        .unwrap_or_else(|| "未知域名".to_string());
+                        
+                    println!("🔍 DNS查询域名: {}", query_domain);
+                    
+                    // 检查是否为AAAA查询
+                    if let Some(query) = request_msg.query() {
+                        if query.query_type() == hickory_proto::rr::RecordType::AAAA {
+                            println!("🔍 不支持AAAA查询，返回Refused: {}", query_domain);
+                            
+                            // 创建拒绝响应消息
+                            let mut response = hickory_proto::op::Message::error_msg(
+                                request_msg.id(),
+                                request_msg.op_code(),
+                                hickory_proto::op::ResponseCode::Refused
+                            );
+                            
+                            // 保留原始查询
+                            response.add_query(query.clone());
+                            
+                            // 设置适当的标志
+                            response.set_recursion_available(false);
+                            response.set_authoritative(true);
+                            response.set_recursion_desired(request_msg.recursion_desired());
+                            response.set_checking_disabled(request_msg.checking_disabled());
+                            
+                            // 复制EDNS扩展(如果有)
+                            if let Some(edns) = request_msg.extensions().clone() {
+                                response.set_edns(edns);
+                            }
+                            
+                            // 将响应消息序列化为二进制
+                            match response.to_vec() {
+                                Ok(response_data) => {
+                                    // 获取发送缓冲区并构建响应包
+                                    let mut stack_guard = stack.lock().unwrap();
+                                    let dev = &mut stack_guard.dev;
+                                    
+                                    // 获取发送缓冲区
+                                    let tx_buf = match dev.tun.get_tx_buffer() {
+                                        Some(buf) => buf,
+                                        None => {
+                                            println!("❌ 无法获取发送缓冲区");
+                                            return;
+                                        }
+                                    };
+                                    
+                                    // 检查负载长度
+                                    if response_data.len() > 1500 - 28 {
+                                        println!("❌ DNS响应数据过大: {}", response_data.len());
+                                        dev.tun.return_tx_buffer(tx_buf);
+                                        return;
+                                    }
+                                    
+                                    // 构建回复包
+                                    match (src_addr, dst_addr) {
+                                        (SocketAddr::V4(src_v4), IpAddress::Ipv4(dst_ipv4)) => {
+                                            println!("  构建IPv4 DNS响应包");
+                                            
+                                            // 构建IPv4包头
+                                            let mut packet_data = Vec::with_capacity(20 + 8 + response_data.len());
+                                            
+                                            // IPv4 头部
+                                            let mut header = [0u8; 20];
+                                            header[0] = 0x45;  // 版本4，头部长度5 (5*4=20字节)
+                                            
+                                            // 总长度 (大端序)
+                                            let total_len = (20 + 8 + response_data.len()) as u16;
+                                            header[2] = (total_len >> 8) as u8;
+                                            header[3] = (total_len & 0xFF) as u8;
+                                            
+                                            // 标识符、标志和片偏移都为0
+                                            
+                                            // TTL=64
+                                            header[8] = 64;
+                                            
+                                            // 协议=UDP(17)
+                                            header[9] = 17;
+                                            
+                                            // 源IP (DNS服务器，即原来的目标IP)
+                                            let src_ip_bytes = dst_ipv4.as_bytes();
+                                            header[12] = src_ip_bytes[0];
+                                            header[13] = src_ip_bytes[1];
+                                            header[14] = src_ip_bytes[2];
+                                            header[15] = src_ip_bytes[3];
+                                            
+                                            // 目标IP (客户端，即原来的源IP)
+                                            let dst_ip_bytes = src_v4.ip().octets();
+                                            header[16] = dst_ip_bytes[0];
+                                            header[17] = dst_ip_bytes[1];
+                                            header[18] = dst_ip_bytes[2];
+                                            header[19] = dst_ip_bytes[3];
+                                            
+                                            // 计算IP头校验和
+                                            let mut checksum: u32 = 0;
+                                            for i in 0..10 {
+                                                checksum += ((header[i*2] as u32) << 8) | (header[i*2+1] as u32);
+                                            }
+                                            
+                                            while checksum > 0xFFFF {
+                                                checksum = (checksum & 0xFFFF) + (checksum >> 16);
+                                            }
+                                            
+                                            let checksum = !checksum as u16;
+                                            header[10] = (checksum >> 8) as u8;
+                                            header[11] = (checksum & 0xFF) as u8;
+                                            
+                                            // 添加IP头部
+                                            packet_data.extend_from_slice(&header);
+                                            
+                                            // UDP头部
+                                            let mut udp_header = [0u8; 8];
+                                            
+                                            // 源端口 (使用原始请求的目标端口)
+                                            udp_header[0] = (dst_port >> 8) as u8;
+                                            udp_header[1] = (dst_port & 0xFF) as u8;
+                                            
+                                            // 目标端口 (客户端端口)
+                                            let src_port = src_v4.port();
+                                            udp_header[2] = (src_port >> 8) as u8;
+                                            udp_header[3] = (src_port & 0xFF) as u8;
+                                            
+                                            // UDP长度
+                                            let udp_len = (8 + response_data.len()) as u16;
+                                            udp_header[4] = (udp_len >> 8) as u8;
+                                            udp_header[5] = (udp_len & 0xFF) as u8;
+                                            
+                                            // UDP校验和设为0（可选）
+                                            udp_header[6] = 0;
+                                            udp_header[7] = 0;
+                                            
+                                            // 添加UDP头部
+                                            packet_data.extend_from_slice(&udp_header);
+                                            
+                                            // 添加DNS响应数据
+                                            packet_data.extend_from_slice(&response_data);
+                                            
+                                            // 复制数据到缓冲区
+                                            let packet_len = packet_data.len();
+                                            tx_buf.data[..packet_len].copy_from_slice(&packet_data);
+                                            
+                                            // 发送数据包
+                                            dev.tun.send(tx_buf, packet_len);
+                                            
+                                            // 已处理响应，直接返回
+                                            return;
+                                        },
+                                        (SocketAddr::V6(src_v6), IpAddress::Ipv6(dst_ipv6)) => {
+                                            println!("  构建IPv6 DNS响应包");
+                                            
+                                            // IPv6处理类似，但头部格式不同
+                                            println!("⚠️ IPv6 DNS响应暂未实现，释放缓冲区");
+                                            dev.tun.return_tx_buffer(tx_buf);
+                                            
+                                            // 这里可以添加IPv6实现，类似IPv4
+                                        },
+                                        _ => {
+                                            println!("❌ IP版本不匹配，无法构建DNS响应包");
+                                            dev.tun.return_tx_buffer(tx_buf);
+                                        }
+                                    }
+                                },
+                                Err(e) => {
+                                    println!("❌ 无法序列化DNS响应: {:?}", e);
+                                }
+                            }
+                            
+                            // 已处理AAAA请求，不继续处理FakeIP
+                            return;
+                        }
+                    }
+                    
                     // 使用exchange_with_resolver处理DNS请求
                     let enhanced = true; // 启用增强功能
                     
