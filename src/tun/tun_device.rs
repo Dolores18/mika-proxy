@@ -434,17 +434,12 @@ impl Tun for MacTun {
     }
 
     /// 发送数据，提取 token 中的数据，使用oneshot通道等待结果
-    fn send(&self, buf: TunBufferToken, len: usize) -> Result<(), io::Error> {
-        // 检查设备是否已关闭
-        if self.shutdown_flag.load(Ordering::SeqCst) {
-            return Err(io::Error::new(io::ErrorKind::NotConnected, "TUN设备已关闭"));
-        }
+    fn send(&self, buf: TunBufferToken, len: usize){
+  
         
         let (signature, data) = buf.into_parts();
         let data_ptr = signature[0] as *mut Vec<u8>;
-        if data_ptr.is_null() {
-            return Err(io::Error::new(io::ErrorKind::Other, "无效的发送缓冲区"));
-        }
+    
         
         let boxed_buf = unsafe { Box::from_raw(data_ptr) };
         let data_vec = boxed_buf[..len].to_vec();
@@ -458,22 +453,9 @@ impl Tun for MacTun {
             response_sender: resp_tx,
         });
         
-        if let Err(e) = send_result {
-            return match e {
-                tokio::sync::mpsc::error::TrySendError::Full(_) => {
-                    Err(io::Error::new(io::ErrorKind::WouldBlock, "发送队列已满"))
-                }
-                tokio::sync::mpsc::error::TrySendError::Closed(_) => {
-                    Err(io::Error::new(io::ErrorKind::Other, "发送通道已关闭"))
-                }
-            };
-        }
+    
         
-        // 使用 futures::executor::block_on 来等待结果
-        match futures::executor::block_on(resp_rx) {
-            Ok(result) => result,
-            Err(_) => Err(io::Error::new(io::ErrorKind::Other, "接收结果失败，发送方已关闭"))
-        }
+   
     }
 
 
