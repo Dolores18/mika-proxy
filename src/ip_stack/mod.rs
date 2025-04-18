@@ -306,10 +306,11 @@ fn process_tcp(
     println!(" 🍎当前 TCP 连接数: {}", tcp_socket_count);
 
     if let Entry::Vacant(vac) = tcp_sockets.entry(src_addr) {
+        /* 
         if !is_syn || tcp_socket_count >= 1 << 10 {
             println!(" 🍎 拒绝连接: 不是 SYN 包或连接数超限");
             return;
-        }
+        }*/
         let next = match tcp_next.upgrade() {
             Some(n) => n,
             None => {

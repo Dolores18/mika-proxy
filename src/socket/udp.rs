@@ -27,8 +27,7 @@ fn create_socket_v4(
     )?;
     prepare_socket(&socket)?;
     if remote_ip_indicator.is_loopback() {
-        println!("🌹udp客户端使用测试IPv4 绑定本地端口: {}", 36988);
-        socket.bind(&SocketAddrV4::new(Ipv4Addr::LOCALHOST, 36988).into())?
+        socket.bind(&SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0).into())?
     } else {
         bind_v4(&mut socket)?
     };
@@ -149,8 +148,6 @@ struct UdpSocket<BindFnV4, BindFnV6> {
     bind_notify: (Option<oneshot::Sender<()>>, Option<oneshot::Receiver<()>>),
     tx_buf: Option<(ResolvingAddr, Buffer)>,
     rx_v6_next: bool,
-    last_receive_time: Option<std::time::SystemTime>,
-    last_request_id: Option<u16>,
 }
 
 fn poll_recv_from_two<BindA, BindB>(
@@ -228,41 +225,11 @@ impl<
         }
         Poll::Ready(())
     }
-    fn send_to(&mut self, mut dst: DestinationAddr, buf: Buffer) {
+    fn send_to(&mut self, dst: DestinationAddr, buf: Buffer) {
         let port = dst.port;
-        
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-        println!("🕒 UDPSocket发送数据包，时间: {}s {}ms", now.as_secs(), now.subsec_millis());
-
-        // 检查是否有存储的接收时间，如果有且是DNS响应包，则计算耗时
-        if let Some(receive_time) = self.last_receive_time {
-            if buf.len() >= 2 && self.last_request_id.is_some() {
-                // 获取DNS ID (前两个字节)
-                let response_id = ((buf[0] as u16) << 8) | buf[1] as u16;
-                
-                // 检查是否与上次请求ID匹配
-                if Some(response_id) == self.last_request_id {
-                    let elapsed = receive_time.elapsed();
-                    println!("⏱️ 从接收请求到发送响应的耗时: {:?}", elapsed);
-                    self.last_receive_time = None;
-                    self.last_request_id = None;
-                }
-            }
-        }
-        
-        for (i, chunk) in buf.chunks(16).enumerate() {
-            let hex_values: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
-            let ascii_values: String = chunk.iter()
-                .map(|&b| if b >= 32 && b <= 126 { b as char } else { '.' })
-                .collect();
-            println!("  {:04x}: {:48} {}", i * 16, hex_values.join(" "), ascii_values);
-        }
-        
         match dst.host {
             HostName::Ip(IpAddr::V4(v4)) => {
-                let test_ip = Ipv4Addr::new(223,5,5,5);
-                println!("🌹udp客户端使用测试IPv4 发送数据包: {}", test_ip);
-                self.tx_buf = Some((ResolvingAddr::Ready((Some(test_ip), None, port)), buf));
+                self.tx_buf = Some((ResolvingAddr::Ready((Some(v4), None, port)), buf));
             }
             HostName::Ip(IpAddr::V6(v6)) => {
                 self.tx_buf = Some((ResolvingAddr::Ready((None, Some(v6), port)), buf));
@@ -322,45 +289,11 @@ impl<
         let rx_v6_next = self.rx_v6_next;
         self.rx_v6_next = !rx_v6_next;
         // For fairness
-        let result = if rx_v6_next {
+        if rx_v6_next {
             poll_recv_from_two(cx, &mut self.socket_v6, &mut self.socket_v4)
         } else {
             poll_recv_from_two(cx, &mut self.socket_v4, &mut self.socket_v6)
-        };
-        
-        // 添加打印接收到的UDP数据包内容
-        if let Poll::Ready(Some((ref addr, ref buf))) = result {
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-            println!("📥 UDP接收数据包: 来源={:?}, 长度={}, 时间: {}s {}ms", 
-                     addr, buf.len(), now.as_secs(), now.subsec_millis());
-            println!("  数据包内容(十六进制):");
-            for (i, chunk) in buf.chunks(16).enumerate() {
-                let hex_values: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
-                let ascii_values: String = chunk.iter()
-                    .map(|&b| if b >= 32 && b <= 126 { b as char } else { '.' })
-                    .collect();
-                println!("  {:04x}: {:48} {}", i * 16, hex_values.join(" "), ascii_values);
-            }
-            
-            // 记录接收到的DNS请求的时间
-            if buf.len() >= 2 {
-                // 获取DNS ID (前两个字节)
-                let request_id = ((buf[0] as u16) << 8) | buf[1] as u16;
-                
-                // 如果是DNS查询包（长度为40左右且以特定方式开头），则记录时间
-                if buf.len() >= 12 && 
-                   (buf[2] & 0x80) == 0 && // QR bit = 0 (查询)
-                   (buf[4] == 0 && buf[5] == 1) // QDCOUNT = 1
-                {
-                    self.last_receive_time = Some(std::time::SystemTime::now());
-                    self.last_request_id = Some(request_id);
-                    println!("🕒 开始计时，接收到DNS请求ID: {}, 时间: {}s {}ms", 
-                             request_id, now.as_secs(), now.subsec_millis());
-                }
-            }
         }
-        
-        result
     }
 }
 
@@ -401,8 +334,6 @@ pub async fn dial_datagram_session(
         tx_buf: None,
         resolver,
         rx_v6_next: false,
-        last_receive_time: None,
-        last_request_id: None,
     }))
 }
 

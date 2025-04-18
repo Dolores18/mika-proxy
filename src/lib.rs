@@ -823,11 +823,8 @@ pub async fn start_tun1_server(
     // 初始化MacTun设备
     info!("初始化MacTun设备: {}", tun_name);
     
-    // 获取当前运行时句柄
-    let runtime_handle = tokio::runtime::Handle::current();
-    
-    // 注意：MacTun::new 不是异步函数，不需要 await
-    let tun = MacTun::new(tun_name, tun_ip, tun_netmask, mtu, runtime_handle)?;
+    // 创建TUN设备 - 使用new_ipv4方法直接接受IPv4地址
+    let tun = MacTun::new_ipv4(tun_name, tun_ip, tun_netmask, mtu)?;
     let tun_arc = Arc::new(tun);
     
     info!("TUN设备已创建: {}", tun_arc.get_name());
@@ -923,7 +920,7 @@ pub async fn start_tun1_server(
     info!("TUN服务器启动完成");
     
     // 获取 tun_arc 的强引用用于关闭操作
-    let tun_ref = Arc::clone(&tun_arc);
+    let tun_ref: Arc<MacTun> = Arc::clone(&tun_arc);
     
     // 使用tokio::select同时等待IP栈任务完成和Ctrl+C信号
     tokio::select! {
