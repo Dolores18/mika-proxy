@@ -177,7 +177,7 @@ pub fn run(
     tokio::runtime::Handle::current().spawn_blocking(move || {
         while let Some(recv_buf) = tun.blocking_recv() {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-            println!("🍎ip_stack: 收到数据包，时间: {}s {}ms，长度: {}", now.as_secs(), now.subsec_millis(), recv_buf.len());
+            //println!("🍎ip_stack: 收到数据包，时间: {}s {}ms，长度: {}", now.as_secs(), now.subsec_millis(), recv_buf.len());
             process_packet(&stack, recv_buf,dns_hijack, &resolver);
         }
     })
@@ -201,7 +201,7 @@ fn process_packet(stack: &IpStack, packet: Buffer, dns_hijack: bool, resolver: &
                         Err(_) => return,
                     };
                     let (src_port, dst_port, is_syn) = (p.src_port(), p.dst_port(), p.syn());
-                    println!("🍎ip_stack: TCP包，源端口: {}, 目标端口: {}, SYN: {}", src_port, dst_port, is_syn);
+                    //println!("🍎ip_stack: TCP包，源端口: {}, 目标端口: {}, SYN: {}", src_port, dst_port, is_syn);
                  
                     process_tcp(
                         stack,
@@ -318,7 +318,7 @@ fn process_tcp(
                 return;
             }
         };
-        println!(" 🍎创建新的 TCP 连接创建内部发送缓冲区和接受缓冲区");
+       // println!(" 🍎创建新的 TCP 连接创建内部发送缓冲区和接受缓冲区");
         let mut socket = TcpSocket::new(
             RingBuffer::new(vec![0; 1024 * 14]),
             RingBuffer::new(vec![0; 10240]),
@@ -337,7 +337,7 @@ fn process_tcp(
                 port: dst_port,
             },
         );
-        println!(" 🍎启动 TCP 流处理任务");
+        //println!(" 🍎启动 TCP 流处理任务");
         tokio::spawn({
             let stack = stack.clone();
             async move {
@@ -352,19 +352,19 @@ fn process_tcp(
                     tx_buf: Some((Vec::with_capacity(4 * 1024), 0)),
                 };
                 if stream.handshake().await.is_ok() {
-                    println!(" 🍎 TCP 握手成功");
+                    //println!(" 🍎 TCP 握手成功");
                     next.on_stream(Box::new(stream) as _, Buffer::new(), Box::new(ctx));
                 } else {
-                    println!(" 🍎 TCP 握手失败");
+                    //println!(" 🍎 TCP 握手失败");
                 }
             }
         });
     } else {
-        println!(" 🍎已存在的 TCP 连接");
+        //println!(" 🍎已存在的 TCP 连接");
     };
     let now = Instant::now();
     let _ = netif.poll(now.into(), dev, socket_set);
-    println!(" 🍎 完成网络接口轮询");
+    //println!(" 🍎 完成网络接口轮询");
 }
 
 fn process_udp(

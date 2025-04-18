@@ -118,7 +118,7 @@ impl Stream for IpStackStream {
     }
 
     fn commit_tx_buffer(&mut self, buffer: Buffer) -> FlowResult<()> {
-        println!("🍎ip_stack: 提交数据包，长度: {}", buffer.len());
+        //println!("🍎ip_stack: 提交数据包，长度: {}", buffer.len());
         self.tx_buf = Some((buffer, 0));
      
         Ok(())
