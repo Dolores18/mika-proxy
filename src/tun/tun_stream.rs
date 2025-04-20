@@ -36,7 +36,7 @@ impl TunTcpStream {
 
     pub fn new_af_sensitive(stream: netstack_smoltcp::TcpStream, local_addr: SocketAddr, remote_addr: SocketAddr) -> Self {
         let remote_dest = DestinationAddr::from(remote_addr);
-        println!("[TunTcpStream::new_af_sensitive] 创建新连接: {} -> {}", remote_addr, local_addr);
+        info!("[TunTcpStream::new_af_sensitive] 创建新连接: {} -> {}", remote_addr, local_addr);
         Self {
             inner: stream,
             context: Arc::new(FlowContext::new_af_sensitive(local_addr, remote_dest)),
@@ -51,11 +51,11 @@ impl TunTcpStream {
 
     // 添加一个方法，用于保持连接活跃
     pub fn keep_alive(&self) -> impl Future<Output = ()> + 'static {
-        println!("[TunTcpStream::keep_alive] 启动保活任务");
+        info!("[TunTcpStream::keep_alive] 启动保活任务");
         let remote_addr = self.context.remote_peer.to_string();
         async move {
             loop {
-                println!("[TunTcpStream::keep_alive] 连接 {} 保持活跃中...", remote_addr);
+                info!("[TunTcpStream::keep_alive] 连接 {} 保持活跃中...", remote_addr);
                 tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
             }
         }
@@ -85,7 +85,7 @@ impl Stream for TunTcpStream {
     }
 
     fn poll_rx_buffer(&mut self, cx: &mut Context<'_>) -> Poll<Result<Buffer, (Buffer, FlowError)>> {
-        println!("[TunTcpStream::poll_rx_buffer] 开始读取数据");
+    info!("[TunTcpStream::poll_rx_buffer] 开始读取数据");
         // 创建一个新的缓冲区，预分配 16KB
         let mut buffer = Vec::with_capacity(16384);
         // 确保缓冲区有足够空间
@@ -108,7 +108,7 @@ impl Stream for TunTcpStream {
             }
             Err(e) => {
                 // 返回空的缓冲区和错误
-                println!("[TunTcpStream::poll_rx_buffer] 读取错误: {:?}", e);
+                info!("[TunTcpStream::poll_rx_buffer] 读取错误: {:?}", e);
                 Poll::Ready(Err((Vec::new(), convert_error(e))))
             }
         }
@@ -116,7 +116,7 @@ impl Stream for TunTcpStream {
 
     fn poll_tx_buffer(&mut self, _cx: &mut Context<'_>, size: NonZeroUsize) -> Poll<FlowResult<Buffer>> {
         // 直接返回一个新的缓冲区，准备接收待发送的数据
-        println!("[TunTcpStream::poll_tx_buffer] 分配发送缓冲区，请求大小: {}", size.get());
+        info!("[TunTcpStream::poll_tx_buffer] 分配发送缓冲区，请求大小: {}", size.get());
         let buffer = Vec::with_capacity(size.get());
         Poll::Ready(Ok(buffer))
     }
@@ -124,33 +124,33 @@ impl Stream for TunTcpStream {
     fn commit_tx_buffer(&mut self, buffer: Buffer) -> FlowResult<()> {
         // 避免提交空缓冲区
         if buffer.is_empty() {
-            println!("[TunTcpStream::commit_tx_buffer] 跳过空缓冲区");
+            info!("[TunTcpStream::commit_tx_buffer] 跳过空缓冲区");
             return Ok(());  // 静默跳过空缓冲区，不作为错误处理
         }
         
-        println!("[TunTcpStream::commit_tx_buffer] 提交发送缓冲区，大小: {}", buffer.len());
+        info!("[TunTcpStream::commit_tx_buffer] 提交发送缓冲区，大小: {}", buffer.len());
         
         // 直接操作pending_write，不需要锁
         if !self.pending_write.is_empty() {
-            println!("[TunTcpStream::commit_tx_buffer] 合并到现有缓冲区 (原大小: {})", self.pending_write.len());
+            info!("[TunTcpStream::commit_tx_buffer] 合并到现有缓冲区 (原大小: {})", self.pending_write.len());
             self.pending_write.extend_from_slice(&buffer);
         } else {
             self.pending_write = buffer;
         }
         
-        println!("[TunTcpStream::commit_tx_buffer] 更新后缓冲区大小: {}", self.pending_write.len());
+        info!("[TunTcpStream::commit_tx_buffer] 更新后缓冲区大小: {}", self.pending_write.len());
         self.has_pending_data = true;
         
-        println!("[TunTcpStream::commit_tx_buffer] 数据已放入缓冲区，等待下次poll_flush_tx发送");
+        info!("[TunTcpStream::commit_tx_buffer] 数据已放入缓冲区，等待下次poll_flush_tx发送");
         Ok(())
     }
 
     fn poll_flush_tx(&mut self, cx: &mut Context<'_>) -> Poll<FlowResult<()>> {
-        println!("[TunTcpStream::poll_flush_tx] 极简版开始执行");
+        info!("[TunTcpStream::poll_flush_tx] 极简版开始执行");
 
         // 检查是否有待发送数据
         if self.has_pending_data && !self.pending_write.is_empty() {
-            println!("[TunTcpStream::poll_flush_tx] 尝试写入 {} 字节", self.pending_write.len());
+            info!("[TunTcpStream::poll_flush_tx] 尝试写入 {} 字节", self.pending_write.len());
             
             // 取出数据
             let data = std::mem::take(&mut self.pending_write);
@@ -159,18 +159,18 @@ impl Stream for TunTcpStream {
             // 尝试一次性写入
             match Pin::new(&mut self.inner).poll_write(cx, &data) {
                 Poll::Ready(Ok(n)) => {
-                    println!("[TunTcpStream::poll_flush_tx] 写入了 {} 字节", n);
+                    info!("[TunTcpStream::poll_flush_tx] 写入了 {} 字节", n);
                     // 不处理部分写入情况，即使 n < data.len() 也不管
                 }
                 Poll::Ready(Err(e)) => {
-                    println!("[TunTcpStream::poll_flush_tx] 写入错误: {:?}", e);
+                    info!("[TunTcpStream::poll_flush_tx] 写入错误: {:?}", e);
                     return Poll::Ready(Err(convert_error(e)));
                 }
                 Poll::Pending => {
                     // 将数据放回缓冲区，因为写入未完成
                     self.pending_write = data;
                     self.has_pending_data = true;
-                    println!("[TunTcpStream::poll_flush_tx] 写入挂起");
+                    info!("[TunTcpStream::poll_flush_tx] 写入挂起");
                     return Poll::Pending;
                 }
             }
@@ -179,37 +179,37 @@ impl Stream for TunTcpStream {
         // 直接尝试刷新底层流
         match Pin::new(&mut self.inner).poll_flush(cx) {
             Poll::Ready(Ok(())) => {
-                println!("[TunTcpStream::poll_flush_tx] 刷新成功");
+                info!("[TunTcpStream::poll_flush_tx] 刷新成功");
                 Poll::Ready(Ok(()))
             }
             Poll::Ready(Err(e)) => {
-                println!("[TunTcpStream::poll_flush_tx] 刷新错误: {:?}", e);
+                info!("[TunTcpStream::poll_flush_tx] 刷新错误: {:?}", e);
                 Poll::Ready(Err(convert_error(e)))
             }
             Poll::Pending => {
-                println!("[TunTcpStream::poll_flush_tx] 刷新挂起");
+                info!("[TunTcpStream::poll_flush_tx] 刷新挂起");
                 Poll::Pending
             }
         }
     }
 
     fn poll_close_tx(&mut self, cx: &mut Context<'_>) -> Poll<FlowResult<()>> {
-        println!("[TunTcpStream::poll_close_tx] 开始关闭发送通道");
+        info!("[TunTcpStream::poll_close_tx] 开始关闭发送通道");
         
         // 检查是否有待发送数据
         if self.has_pending_data {
-            println!("[TunTcpStream::poll_close_tx] 发现未发送的数据，先刷新缓冲区");
+            info!("[TunTcpStream::poll_close_tx] 发现未发送的数据，先刷新缓冲区");
             // 先确保数据被发送出去
             match self.poll_flush_tx(cx) {
                 Poll::Ready(Ok(())) => {
-                    println!("[TunTcpStream::poll_close_tx] 刷新成功，继续关闭");
+                    info!("[TunTcpStream::poll_close_tx] 刷新成功，继续关闭");
                 }
                 Poll::Ready(Err(e)) => {
-                    println!("[TunTcpStream::poll_close_tx] 刷新失败: {:?}", e);
+                    info!("[TunTcpStream::poll_close_tx] 刷新失败: {:?}", e);
                     return Poll::Ready(Err(e));
                 }
                 Poll::Pending => {
-                    println!("[TunTcpStream::poll_close_tx] 刷新操作未完成，等待下一次尝试");
+                    info!("[TunTcpStream::poll_close_tx] 刷新操作未完成，等待下一次尝试");
                     return Poll::Pending;
                 }
             }
@@ -218,11 +218,11 @@ impl Stream for TunTcpStream {
         // 数据已刷新完毕，现在可以安全关闭连接
         match ready!(Pin::new(&mut self.inner).poll_shutdown(cx)) {
             Ok(()) => {
-                println!("[TunTcpStream::poll_close_tx] 关闭成功");
+                info!("[TunTcpStream::poll_close_tx] 关闭成功");
                 Poll::Ready(Ok(()))
             },
             Err(e) => {
-                println!("[TunTcpStream::poll_close_tx] 关闭错误: {:?}", e);
+                info!("[TunTcpStream::poll_close_tx] 关闭错误: {:?}", e);
                 Poll::Ready(Err(convert_error(e)))
             },
         }

@@ -15,13 +15,12 @@ use crate::flow::{
 };
 use crate::tun::routes::macos::Tunconfig;
 use crate::tun::routes::macos::add_route;
-// 使用crate路径导入我们的tcpstream模块
-use crate::tun::stream::{TunStreamFactory, TunStreamAdapter};
+// 完全移除stream模块的导入
+use crate::tun::tun_stream::{TunStreamHandler, TunTcpStream}; // 使用tun_stream模块
 use crate::tun::datagram::{TunDatagramSession, TunDatagramHandler};
 use crate::flow::*;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use crate::fakeip::FakeIp; // 导入FakeIp
-use crate::tun::tun_stream::TunStreamHandler; // 添加这一行导入TunStreamHandler
+use crate::fakeip::FakeIp;
 // 添加处理UDP连接的函数
 async fn handle_inbound_udp(
     udp_socket: netstack_smoltcp::UdpSocket,
@@ -195,41 +194,42 @@ pub fn get_runner(cfg: Tunconfig) -> Result<Option<Runner>, Box<dyn StdError + S
         futs.push(Box::pin(async move {
             let mut tcp_listener = tcp_listener;
             
-            // 创建TunStreamFactory实例，使用现有的stream_handler
-            let stream_factory = match &stream_handler {
+            // 使用TunStreamHandler替代TunStreamFactory
+            let stream_handler = match &stream_handler {
                 Some(handler) => {
                     let handler_clone = handler.clone();
-                    Some(crate::tun::stream::TunStreamFactory::new(handler_clone))
+                    Some(handler_clone)
                 },
                 None => None
             };
             
             while let Some((stream, local_addr, remote_addr)) = tcp_listener.next().await {
-                // 使用TunStreamFactory处理连接
-                if let Some(factory) = &stream_factory {
-                    let factory_clone = factory.clone();
+                // 使用TunStreamHandler处理连接
+                if let Some(handler) = &stream_handler {
+                    let handler_clone = handler.clone();
                     
                     tokio::spawn(async move {
-                        println!("[inbound] 处理新的TCP连接: {} -> {}", remote_addr, local_addr);
+                        info!("[inbound] 处理新的TCP连接: {} -> {}", remote_addr, local_addr);
                         
-                        // 创建流适配器
-                        let adapter = factory_clone.create_adapter_from_netstack(
+                        // 直接创建TunTcpStream，无需中间适配器
+                        let tun_stream = TunTcpStream::new_af_sensitive(
                             stream,
                             local_addr, 
                             remote_addr
-                        ).await;
+                        );
                         
-                        // 创建上下文
+                        // 获取上下文
                         let context = Box::new(FlowContext::new_af_sensitive(
                             local_addr, 
                             DestinationAddr::from(remote_addr)
                         ));
                         
-                        // 处理连接
-                        factory_clone.handle_connection(adapter, context);
+                        // 包装为Stream类型并传递给handler
+                        let stream_box: Box<dyn Stream> = Box::new(tun_stream);
+                        handler_clone.on_stream(stream_box, Buffer::new(), context);
                     });
                 } else {
-                    println!("[inbound] 警告: 没有配置TCP处理器，忽略连接: {} -> {}", remote_addr, local_addr);
+                    info!("[inbound] 警告: 没有配置TCP处理器，忽略连接: {} -> {}", remote_addr, local_addr);
                 }
             }
             Ok(())
