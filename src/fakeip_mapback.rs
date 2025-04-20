@@ -26,9 +26,20 @@ impl FakeIpMapBackStreamHandler {
     // 尝试将主机名从FakeIP映射回域名
     fn map_back_host(&self, host: &mut HostName) {
         if let HostName::Ip(ip) = host {
-            if let Some(domain) = self.fakeip.lookup_domain_by_fake_ip(*ip) {
-                debug!("FakeIP MapBack: 将 {} 映射回域名 {}", ip, domain);
-                *host = HostName::DomainName(domain);
+            // 首先检查IP是否在FakeIP范围内
+            let is_fake_ip = match ip {
+                IpAddr::V4(ipv4) => self.fakeip.is_fake_ip_v4(*ipv4),
+                IpAddr::V6(ipv6) => self.fakeip.is_fake_ip_v6(*ipv6),
+            };
+            
+            // 只有是FakeIP范围内的IP才尝试映射
+            if is_fake_ip {
+                if let Some(domain) = self.fakeip.lookup_domain_by_fake_ip(*ip) {
+                    debug!("FakeIP MapBack: 将 {} 映射回域名 {}", ip, domain);
+                    *host = HostName::DomainName(domain);
+                }
+            } else {
+                debug!("FakeIP MapBack: IP {} 不在FakeIP范围内，保留原始IP", ip);
             }
         }
     }
@@ -65,9 +76,20 @@ impl DatagramSessionHandler for FakeIpMapBackDatagramSessionHandler {
         
         // 尝试将远程对等方地址从FakeIP映射回域名
         if let HostName::Ip(ip) = &context.remote_peer.host {
-            if let Some(domain) = self.fakeip.lookup_domain_by_fake_ip(*ip) {
-                debug!("FakeIP MapBack: 将 {} 映射回域名 {}", ip, domain);
-                context.remote_peer.host = HostName::DomainName(domain);
+            // 首先检查IP是否在FakeIP范围内
+            let is_fake_ip = match ip {
+                IpAddr::V4(ipv4) => self.fakeip.is_fake_ip_v4(*ipv4),
+                IpAddr::V6(ipv6) => self.fakeip.is_fake_ip_v6(*ipv6),
+            };
+            
+            // 只有是FakeIP范围内的IP才尝试映射
+            if is_fake_ip {
+                if let Some(domain) = self.fakeip.lookup_domain_by_fake_ip(*ip) {
+                    debug!("FakeIP MapBack: 将 {} 映射回域名 {}", ip, domain);
+                    context.remote_peer.host = HostName::DomainName(domain);
+                }
+            } else {
+                debug!("FakeIP MapBack: IP {} 不在FakeIP范围内，保留原始IP", ip);
             }
         }
         
@@ -107,11 +129,23 @@ impl DatagramSession for FakeIpMapBackDatagramSession {
         if let HostName::Ip(ip) = &dest.host {
             // 先复制IP值，避免借用冲突
             let ip_copy = *ip;
-            if let Some(domain) = self.fakeip.lookup_domain_by_fake_ip(ip_copy) {
-                debug!("FakeIP MapBack: 在接收时将 {} 映射回域名 {}", ip_copy, domain);
-                dest.host = HostName::DomainName(domain.clone());
-                // 保存映射关系，以便在发送时使用
-                self.local_forward_mapping.insert(domain, ip_copy);
+            
+            // 首先检查IP是否在FakeIP范围内
+            let is_fake_ip = match ip_copy {
+                IpAddr::V4(ipv4) => self.fakeip.is_fake_ip_v4(ipv4),
+                IpAddr::V6(ipv6) => self.fakeip.is_fake_ip_v6(ipv6),
+            };
+            
+            // 只有是FakeIP范围内的IP才尝试映射
+            if is_fake_ip {
+                if let Some(domain) = self.fakeip.lookup_domain_by_fake_ip(ip_copy) {
+                    debug!("FakeIP MapBack: 在接收时将 {} 映射回域名 {}", ip_copy, domain);
+                    dest.host = HostName::DomainName(domain.clone());
+                    // 保存映射关系，以便在发送时使用
+                    self.local_forward_mapping.insert(domain, ip_copy);
+                }
+            } else {
+                debug!("FakeIP MapBack: IP {} 不在FakeIP范围内，保留原始IP", ip_copy);
             }
         }
         
