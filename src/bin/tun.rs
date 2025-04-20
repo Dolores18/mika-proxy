@@ -14,14 +14,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config_path = project_root.join("config.toml");
     let server_txt_path = project_root.join("server.txt");
     
-    // 解析命令行参数
-    let args: Vec<String> = std::env::args().collect();
-    let tun_name = "utun7".to_string();  // 默认TUN设备名称
-    // 使用硬编码的IP地址，更改为172.16.0.1保留地址
-    let tun_ip = Ipv4Addr::from_str("172.16.0.1").unwrap();
-    let tun_netmask = Ipv4Addr::from_str("255.255.255.0").unwrap();
-    let mtu = Some(1500u16);  // 显式指定类型为u16
-    
     // 尝试加载 TOML 配置文件
     let app_config = match AppConfig::load_from_file(config_path.to_str().unwrap()) {
         Ok(config) => {
@@ -57,22 +49,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     println!("===============================");
     
+    // 从配置中读取TUN设置
+    let tun_name = app_config.tun.name.clone();
+    let tun_ip = Ipv4Addr::from_str(&app_config.tun.address).unwrap_or_else(|_| {
+        println!("⚠️ 无效的TUN IP地址格式: {}, 使用默认值", app_config.tun.address);
+        Ipv4Addr::from_str("172.16.0.1").unwrap()
+    });
+    let tun_netmask = Ipv4Addr::from_str(&app_config.tun.netmask).unwrap_or_else(|_| {
+        println!("⚠️ 无效的网络掩码格式: {}, 使用默认值", app_config.tun.netmask);
+        Ipv4Addr::from_str("255.255.255.0").unwrap()
+    });
+    let mtu = Some(app_config.tun.mtu);
+    
     println!("启动TUN服务器...");
     println!("TUN设备名称: {}", tun_name);
     println!("TUN设备IP地址: {}", tun_ip);
     println!("TUN网络掩码: {}", tun_netmask);
     println!("MTU: {:?}", mtu);
+    println!("DNS拦截: {}", if app_config.tun.dns_hijack { "已启用" } else { "已禁用" });
     println!("FakeIP: 已启用 (198.18.0.0/16域名映射)");
-    println!("DNS拦截: 已启用");
     
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(4)
-        .enable_all()
-        .build()
-        .expect("Failed to create runtime");
+    if !app_config.tun.routes.is_empty() {
+        println!("配置的路由:");
+        for route in &app_config.tun.routes {
+            println!("  - {}", route);
+        }
+    }
     
-    // 启动TUN服务器
-    start_tun1_server(&tun_name, tun_ip, tun_netmask, mtu, config, app_config, runtime).await?;
+    // 启动TUN服务器，使用引用而不是所有权
+    // 注意：由于#[tokio::main]宏已经创建了运行时，我们无需再传递runtime参数
+    start_tun1_server(&tun_name, tun_ip, tun_netmask, mtu, config, app_config, &tokio::runtime::Handle::current()).await?;
     
     Ok(())
 } 

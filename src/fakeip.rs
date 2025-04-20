@@ -44,6 +44,8 @@ impl FakeIp {
             .flatten()
         {
             Some(cache) => {
+                let entries_count = cache.cache.len();
+                println!("✅ 从数据库加载FakeIP缓存成功，共 {} 条映射记录", entries_count);
                 for (k, v) in cache.cache {
                     lru.put(k, v);
                 }
@@ -52,10 +54,13 @@ impl FakeIp {
                     cache: lru,
                 }
             }
-            None => Inner {
-                current: 1,
-                cache: lru,
-            },
+            None => {
+                println!("ℹ️ 数据库中没有FakeIP缓存，将创建新的缓存");
+                Inner {
+                    current: 1,
+                    cache: lru,
+                }
+            }
         };
         Self {
             prefix_v4: u16::from_be_bytes(prefix_v4),
@@ -88,7 +93,21 @@ impl FakeIp {
                 cache: inner.cache.iter().map(|(k, v)| (k.clone(), *v)).collect(),
             }
         };
-        self.plugin_cache.set(PLUGIN_CACHE_KEY, &cache).ok();
+        
+        // 增加日志来跟踪缓存保存过程
+        let entries_count = {
+            let inner = self.inner.lock().unwrap();
+            inner.cache.len()
+        };
+        
+        match self.plugin_cache.set(PLUGIN_CACHE_KEY, &cache) {
+            Ok(_) => {
+                println!("✅ 成功保存FakeIP缓存到数据库，共 {} 条映射记录", entries_count);
+            },
+            Err(e) => {
+                eprintln!("❌ 保存FakeIP缓存到数据库失败: {:?}", e);
+            }
+        }
     }
 
     // 新增方法: 检查IP是否由FakeIP分配

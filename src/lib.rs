@@ -345,7 +345,21 @@ pub async fn start_proxy_server(
     let stat = forward::StatHandle::default();
 
     // 创建DNS服务器用于缓存
-    let dns_plugin_cache = data::PluginCache::new(data::PluginId(1), None);
+    // 创建数据库连接
+    let dns_db_path = std::path::Path::new("./proxy_cache.db");
+    let dns_db = match data::Database::open(dns_db_path) {
+        Ok(db) => {
+            info!("✅ 成功打开/创建DNS缓存数据库: {:?}", dns_db_path);
+            Some(db)
+        },
+        Err(e) => {
+            error!("❌ 无法打开/创建DNS缓存数据库: {:?} - 错误: {:?}", dns_db_path, e);
+            None
+        }
+    };
+    
+    // 使用新创建的数据库连接
+    let dns_plugin_cache = data::PluginCache::new(data::PluginId(1), dns_db);
     let dns_server = Arc::new(DnsServer::new(
         100, // 并发限制
         Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
@@ -355,7 +369,7 @@ pub async fn start_proxy_server(
     
     // 启动缓存定期写入任务
     tokio::spawn(cache_writer(dns_server.clone()));
-    println!("✅ DNS服务器缓存系统已启动");
+    println!("✅ DNS服务器缓存系统已启动，解析结果将持久化保存到数据库");
     
     // 创建缓存解析器，先查询缓存，未命中再使用DoH
     let caching_resolver: Arc<dyn Resolver> = Arc::new(host_resolver::CachingResolver::new(
@@ -679,7 +693,21 @@ pub async fn start_dispatcher_server(
     let proxy_resolver: Arc<dyn Resolver> = Arc::new(HostResolver::new(vec![], doh_factories));
 
     // 创建DNS服务器用于缓存
-    let dns_plugin_cache = data::PluginCache::new(data::PluginId(1), None);
+    // 创建数据库连接
+    let dns_db_path = std::path::Path::new("./proxy_cache.db");
+    let dns_db = match data::Database::open(dns_db_path) {
+        Ok(db) => {
+            info!("✅ 成功打开/创建DNS缓存数据库: {:?}", dns_db_path);
+            Some(db)
+        },
+        Err(e) => {
+            error!("❌ 无法打开/创建DNS缓存数据库: {:?} - 错误: {:?}", dns_db_path, e);
+            None
+        }
+    };
+    
+    // 使用新创建的数据库连接
+    let dns_plugin_cache = data::PluginCache::new(data::PluginId(1), dns_db);
     let dns_server = Arc::new(DnsServer::new(
         100, // 并发限制
         Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
@@ -689,7 +717,7 @@ pub async fn start_dispatcher_server(
     
     // 启动缓存定期写入任务
     tokio::spawn(cache_writer(dns_server.clone()));
-    println!("✅ DNS服务器缓存系统已启动");
+    println!("✅ DNS服务器缓存系统已启动，解析结果将持久化保存到数据库");
     
     // 创建缓存解析器，先查询缓存，未命中再使用DoH
     let caching_resolver: Arc<dyn Resolver> = Arc::new(host_resolver::CachingResolver::new(
@@ -869,7 +897,8 @@ pub async fn start_tun1_server(
     mtu: Option<u16>,
     server_config: ServerConfig,
     app_config: config::AppConfig,
-    runtime: tokio::runtime::Runtime,
+    // 使用Handle而不是Runtime
+    _runtime_handle: &tokio::runtime::Handle,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("开始初始化 TUN 服务器");
     
@@ -986,16 +1015,34 @@ pub async fn start_tun1_server(
     ));
 
     // 创建FakeIP实例
-    let plugin_cache = data::PluginCache::new(data::PluginId(2), None);
+    // 创建数据库连接
+    let db_path = std::path::Path::new("./proxy_cache.db");
+    
+    // 尝试打开或创建数据库
+    let db = match data::Database::open(db_path) {
+        Ok(db) => {
+            info!("✅ 成功打开/创建数据库: {:?}", db_path);
+            Some(db)
+        },
+        Err(e) => {
+            error!("❌ 无法打开/创建数据库: {:?} - 错误: {:?}", db_path, e);
+            None
+        }
+    };
+    
+    // 创建FakeIP的plugin_cache，传入数据库连接
+    let plugin_cache = data::PluginCache::new(data::PluginId(2), db);
     let fakeip = Arc::new(FakeIp::new(
         [198, 18], // 使用198.18.0.0/16作为FakeIP范围
         [0xfc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],  // 使用fc00::/18作为IPv6前缀
         plugin_cache
     ));
     
+    // 添加日志
+    info!("✅ FakeIP服务已初始化，域名映射将持久化保存到数据库");
+    
     // 启动FakeIP缓存写入任务
-    tokio::spawn(fakeip::cache_writer(fakeip.clone()));
-    info!("FakeIP服务已初始化");
+    let cache_task = tokio::spawn(fakeip::cache_writer(fakeip.clone()));
 
     // 创建TCP和UDP调用链 - 使用FakeIpMapBack处理器替代原来的DnsServer和MapBack
     
@@ -1015,9 +1062,16 @@ pub async fn start_tun1_server(
     let gateway_str = tun_ip.to_string();
     let netmask_str = tun_netmask.to_string();
 
-    // 不设置任何路由监控
-    let routes = None;
-    info!("TUN设备已创建，但不监控任何路由");
+    // 使用app_config中的路由配置，不再硬编码
+    let routes = if app_config.tun.routes.is_empty() {
+        info!("配置文件中没有指定路由，不配置路由");
+        None
+    } else {
+        info!("使用配置文件中的路由配置: {:?}", app_config.tun.routes);
+        Some(app_config.tun.routes.clone())
+    };
+
+    info!("TUN设备已创建，路由配置: {:?}", routes);
     
     // 创建TUN配置对象
     let mut tun_config = crate::tun::routes::macos::Tunconfig::new(
@@ -1028,11 +1082,11 @@ pub async fn start_tun1_server(
         gateway_str
     );
     
-    // 设置启用TUN
-    tun_config.enabled = true;
-    
-    // 启用DNS劫持并设置FakeIP
-    tun_config = tun_config.with_dns_hijack(true);
+    // 设置启用TUN，使用配置文件中的设置
+    tun_config.enabled = app_config.tun.enabled;
+
+    // 使用配置文件中的DNS劫持设置
+    tun_config = tun_config.with_dns_hijack(app_config.tun.dns_hijack);
     tun_config = tun_config.with_fakeip(fakeip.clone());
     
     // 设置stream_handler和datagram_handler，使用带FakeIpMapBack的处理器
@@ -1057,6 +1111,13 @@ pub async fn start_tun1_server(
                 _ = tokio::signal::ctrl_c() => {
                     println!("收到中断信号，正在关闭TUN服务器...");
                 }
+            }
+            
+            // 等待缓存写入任务结束
+            if !cache_task.is_finished() {
+                println!("正在等待缓存写入任务完成...");
+                // 尝试取消任务而不是等待它
+                cache_task.abort();
             }
             
             info!("TUN服务器已关闭");

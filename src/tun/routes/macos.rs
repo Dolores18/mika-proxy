@@ -72,17 +72,76 @@ fn get_outbound_interface() -> Option<NetworkInterface> {
 
 /// let's assume that the `route` command is available on macOS
 pub fn add_route(via: &str, dest: &str) -> std::io::Result<()> {
-    let cmd = std::process::Command::new("route")
-        .arg("add")
-        .arg("-net")
-        .arg(dest)
-        .arg("-interface")
-        .arg(via)
-        .output()?;
+    // 判断是否是IPv6地址
+    if dest.contains(':') {
+        // IPv6路由
+        // 使用ifconfig添加IPv6地址，如果dest格式为IPv6地址/前缀
+        if dest.contains('/') {
+            let parts: Vec<&str> = dest.split('/').collect();
+            if parts.len() == 2 {
+                let cmd = std::process::Command::new("ifconfig")
+                    .arg(via)
+                    .arg("inet6")
+                    .arg(parts[0])
+                    .arg("prefixlen")
+                    .arg(parts[1])
+                    .arg("alias")
+                    .output()?;
+                
+                warn!("executing: ifconfig {} inet6 {} prefixlen {} alias", via, parts[0], parts[1]);
+                if !cmd.status.success() {
+                    return Err(new_io_error("add ipv6 address failed"));
+                }
+                return Ok(());
+            }
+        }
+        
+        // 添加IPv6路由
+        let cmd = std::process::Command::new("route")
+            .arg("add")
+            .arg("-inet6")
+            .arg(dest)
+            .arg("-interface")
+            .arg(via)
+            .output()?;
+            
+        warn!("executing: route add -inet6 {} -interface {}", dest, via);
+        if !cmd.status.success() {
+            return Err(new_io_error("add ipv6 route failed"));
+        }
+    } else {
+        // IPv4路由
+        let cmd = std::process::Command::new("route")
+            .arg("add")
+            .arg("-net")
+            .arg(dest)
+            .arg("-interface")
+            .arg(via)
+            .output()?;
 
-    warn!("executing: route add -net {} -interface {}", dest, via);
+        warn!("executing: route add -net {} -interface {}", dest, via);
+        if !cmd.status.success() {
+            return Err(new_io_error("add route failed"));
+        }
+    }
+    
+    Ok(())
+}
+
+/// 专门用于配置IPv6地址
+pub fn configure_ipv6(interface: &str, ipv6_addr: &str, prefix_len: u8) -> std::io::Result<()> {
+    let cmd = std::process::Command::new("ifconfig")
+        .arg(interface)
+        .arg("inet6")
+        .arg(ipv6_addr)
+        .arg("prefixlen")
+        .arg(prefix_len.to_string())
+        .arg("alias")
+        .output()?;
+        
+    warn!("executing: ifconfig {} inet6 {} prefixlen {} alias", interface, ipv6_addr, prefix_len);
     if !cmd.status.success() {
-        Err(new_io_error("add route failed"))
+        Err(new_io_error("configure ipv6 address failed"))
     } else {
         Ok(())
     }

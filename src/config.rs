@@ -19,6 +19,8 @@ pub struct AppConfig {
     pub domains: DomainsConfig,
     #[serde(default)]
     pub client: ClientConfig,
+    #[serde(default)]
+    pub tun: TunConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -81,6 +83,7 @@ impl Default for AppConfig {
             },
             domains: DomainsConfig::default(),
             client: ClientConfig::default(),
+            tun: TunConfig::default(),
         }
     }
 }
@@ -299,4 +302,40 @@ pub struct ServerStatus {
     pub connections: u32,
     pub uplink_bytes: u64,
     pub downlink_bytes: u64,
+}
+
+// 添加TUN配置相关结构体
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct TunConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_tun_name")]
+    pub name: String,
+    #[serde(default = "default_tun_address")]
+    pub address: String,
+    #[serde(default = "default_tun_netmask")]
+    pub netmask: String,
+    #[serde(default = "default_tun_mtu")]
+    pub mtu: u16,
+    #[serde(default)]
+    pub routes: Vec<String>,
+    #[serde(default)]
+    pub dns_hijack: bool,
+}
+
+// 默认值函数
+fn default_tun_name() -> String {
+    "utun7".to_string()
+}
+
+fn default_tun_address() -> String {
+    "172.16.0.1".to_string()
+}
+
+fn default_tun_netmask() -> String {
+    "255.255.255.0".to_string()
+}
+
+fn default_tun_mtu() -> u16 {
+    1500
 }
