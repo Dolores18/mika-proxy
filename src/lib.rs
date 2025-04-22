@@ -824,11 +824,10 @@ pub async fn start_tun1_server(
     info!("初始化MacTun设备: {}", tun_name);
     
     // 创建TUN设备 - 使用new_ipv4方法直接接受IPv4地址
-    let tun = MacTun::new_ipv4(tun_name, tun_ip, tun_netmask, mtu)?;
+    let tun = MacTun::new_ipv4(tun_name, tun_ip, tun_netmask, mtu).await?;
     let tun_arc = Arc::new(tun);
     
-    info!("TUN设备已创建: {}", tun_arc.get_name());
-    info!("TUN设备IP地址: {}", tun_arc.get_address());
+
     // 修改代理地址创建方式
     let server_config_clone = Arc::new(server_config.clone());
     let proxy_addr = server_config_clone.create_fixed_adrr();
