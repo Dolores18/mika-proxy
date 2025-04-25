@@ -28,6 +28,8 @@ use tracing::debug;
 use crate::tls::DefaultTlsVerifier;
 use crate::tuic::types::ServerAddr;
 use crate::tuic::types::SocketAdderTrans;
+use futures::future::poll_fn;
+
 #[derive(Debug, Clone)]
 pub struct HandlerOptions {
     pub name: String,
@@ -207,9 +209,8 @@ impl Handler {
         // 获取TUIC连接
         let conn = self.get_conn(&*self.resolver).await?;
         
-        // 给认证任务一些时间完成
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        
+
+    
         // 从context中获取目标地址
         let dest_addr = context.remote_peer.clone().into_tuic();
         
@@ -222,6 +223,26 @@ impl Handler {
         // 只返回流对象，不处理initial_data
         Ok(Box::new(compat_stream))
     }
+
+    // 添加发送数据的辅助函数
+    async fn send_data(&self, stream: &mut dyn Stream, data: &[u8]) -> FlowResult<()> {
+        let len = match data.len().try_into() {
+            Ok(len) => len,
+            Err(_) => return Ok(()),
+        };
+        
+        // 获取传输缓冲区
+        let mut tx_buf = poll_fn(|cx| stream.poll_tx_buffer(cx, len)).await?;
+        
+        // 将数据写入缓冲区
+        tx_buf.extend(data);
+        
+        // 提交缓冲区
+        stream.commit_tx_buffer(tx_buf)?;
+        
+        // 确保数据被刷新发送
+        poll_fn(|cx| stream.poll_flush_tx(cx)).await
+    }
 }
 
 #[async_trait]
@@ -232,7 +253,7 @@ impl StreamOutboundFactory for Handler {
         initial_data: &'b [u8],
     ) -> FlowResult<(Box<dyn Stream>, Buffer)> {
         // 先调用内层函数建立连接
-        let stream = self.do_connect_stream(context).await
+        let mut stream = self.do_connect_stream(context).await
             .map_err(|e| {
                 FlowError::Io(std::io::Error::new(
                     std::io::ErrorKind::Other, 
@@ -240,10 +261,12 @@ impl StreamOutboundFactory for Handler {
                 ))
             })?;
         
-        // 不尝试写入initial_data，直接返回
-        // 框架会自动处理initial_data传输
+        // 发送初始数据到TUIC流
+        if !initial_data.is_empty() {
+            self.send_data(&mut *stream, initial_data).await?;
+        }
         
-        // 始终返回空Buffer给客户端
+        // 返回流和空缓冲区
         Ok((stream, Buffer::new()))
     }
 }
