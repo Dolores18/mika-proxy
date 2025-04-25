@@ -88,6 +88,9 @@ mod fakeip_mapback;
 pub use fakeip_mapback::{FakeIpMapBackStreamHandler, FakeIpMapBackDatagramSessionHandler};
 mod tuic;
 mod tls;
+use uuid::Uuid;
+use quinn::{VarInt};
+use std::time::Duration;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerStatus {
     pub server_address: String,
@@ -1133,4 +1136,90 @@ pub async fn start_tun1_server(
             Err(e)
         }
     }
+}
+pub async fn start_quic_server(
+    app_config: config::AppConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    info!("启动 QUIC 代理服务器");
+    
+    // 硬编码服务器配置
+    let server_addr = "47.79.39.75".to_string();
+    let server_port = 1005;
+    let uuid = Uuid::parse_str("d39c46e2-71c1-49aa-b9a8-419ef924ed6b").unwrap();
+    let password = "4gYk7WzL9q3e".to_string();
+    
+    info!("QUIC 服务器配置: {}:{}", server_addr, server_port);
+    
+    // 创建系统解析器
+    let resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
+    
+    // 统计对象
+    let stat = forward::StatHandle::default();
+    
+    // 创建 TUIC 处理器选项
+    let tuic_options = tuic::HandlerOptions {
+        name: "tuic-client".to_string(),
+        server: server_addr,
+        port: server_port,
+        uuid,
+        password,
+        udp_relay_mode: tuic::types::UdpRelayMode::Native,
+        disable_sni: true,
+        alpn: vec![b"h3".to_vec(), b"spdy/3.1".to_vec()],
+        heartbeat_interval: Duration::from_secs(3),
+        reduce_rtt: false,
+        request_timeout: Duration::from_secs(8),
+        idle_timeout: Duration::from_secs(300),
+        congestion_controller: tuic::types::CongestionControl::Cubic,
+        max_open_stream: VarInt::from(100u32),
+        gc_interval: Duration::from_secs(30),
+        gc_lifetime: Duration::from_secs(60),
+        send_window: 16777216,  
+        receive_window: VarInt::from(8388608u32),  
+        skip_cert_verify: true,
+        max_udp_relay_packet_size: 1500,
+        ip: Some(String::from("47.79.39.75")),
+        sni: None,
+    };
+    
+    // 创建 TUIC 处理器
+    let tuic_handler = Arc::new(tuic::Handler::new(tuic_options, resolver.clone()));
+    
+    // 创建 TCP 转发处理器，使用 TUIC 处理器作为出站工厂
+    let tcp_handler = Arc::new(forward::StreamForwardHandler {
+        outbound: Arc::downgrade(&tuic_handler) as Weak<dyn StreamOutboundFactory>,
+        request_timeout: 10000,
+        stat: stat.clone(),
+    });
+    
+    // 创建 SOCKS5 处理器
+    let socks5_handler = Arc::new(Socks5Handler::new(
+        None,
+        Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>,
+    ));
+    
+    // 从配置中获取监听地址
+    let listen_addr_v4 = app_config.client.listen_addr_v4.clone();
+    let listen_addr_v6 = app_config.client.listen_addr_v6.clone();
+    
+    println!(
+        "QUIC proxy server listening on {} (IPv4) and {} (IPv6)",
+        listen_addr_v4, listen_addr_v6
+    );
+    
+    // 创建监听器
+    let handle_v4 = listen_tcp(
+        Arc::downgrade(&socks5_handler) as Weak<dyn StreamHandler>,
+        listen_addr_v4,
+    )?;
+    
+    let handle_v6 = listen_tcp(
+        Arc::downgrade(&socks5_handler) as Weak<dyn StreamHandler>,
+        listen_addr_v6,
+    )?;
+    
+    // 等待所有监听器完成
+    tokio::try_join!(handle_v4, handle_v6)?;
+    
+    Ok(())
 }

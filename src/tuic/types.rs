@@ -180,27 +180,32 @@ impl TuicConnection {
         tracing::info!("connection established");
 
         // TODO check the cancellation safety of tuic_auth
+        println!("开始认证");
         tokio::spawn(self.clone().tuic_auth(zero_rtt_accepted));
         tokio::spawn(self.clone().cyclical_tasks(
             heartbeat,
             gc_interval,
             gc_lifetime,
         ));
-
+        println!("开始循环任务");
         let err = loop {
             tokio::select! {
+                /* 
                 res = self.accept_uni_stream() => match res {
                     Ok((recv, reg)) => tokio::spawn(self.clone().handle_uni_stream(recv, reg)),
                     Err(err) => break err,
                 },
+                */
                 res = self.accept_bi_stream() => match res {
                     Ok((send, recv, reg)) => tokio::spawn(self.clone().handle_bi_stream(send, recv, reg)),
                     Err(err) => break err,
                 },
+                /* 
                 res = self.accept_datagram() => match res {
                     Ok(dg) => tokio::spawn(self.clone().handle_datagram(dg)),
                     Err(err) => break err,
                 },
+                */
             };
         };
 

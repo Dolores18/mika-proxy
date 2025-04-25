@@ -1,13 +1,12 @@
 use std::{sync::Arc, time::Duration};
 
-use bytes::Bytes;
+use tokio_util::bytes::Bytes;
 use quinn::ZeroRttAccepted;
 
 use anyhow::Result;
 use tuic::Address;
 use tuic_quinn::{Connect, Packet};
-
-use crate::{proxy::datagram::UdpPacket, session::SocksAddr as ClashSocksAddr};
+use anyhow::anyhow;
 
 use super::types::{TuicConnection, UdpRelayMode};
 
@@ -17,20 +16,20 @@ impl TuicConnection {
         zero_rtt_accepted: Option<ZeroRttAccepted>,
     ) {
         if let Some(zero_rtt_accepted) = zero_rtt_accepted {
-            tracing::debug!("[auth] waiting for connection to be fully established");
+            println!("[auth] waiting for connection to be fully established");
             zero_rtt_accepted.await;
         }
 
-        tracing::debug!("[auth] sending authentication");
+        println!("[auth] sending authentication");
 
         match self
             .inner
             .authenticate(self.uuid, self.password.clone())
             .await
         {
-            Ok(()) => tracing::info!("[auth] success {uuid}", uuid = self.uuid),
+            Ok(()) => println!("认证成功[auth] success {uuid}", uuid = self.uuid),
             Err(err) => {
-                tracing::warn!(
+                println!(
                     "[auth] authentication sending error: {:?}",
                     anyhow::anyhow!(err)
                 )
@@ -92,7 +91,7 @@ impl TuicConnection {
             }
         }
     }
-
+/*
     pub async fn incoming_udp(&self, pkt: Packet) {
         let assoc_id = pkt.assoc_id();
         let pkt_id = pkt.pkt_id();
@@ -163,7 +162,7 @@ impl TuicConnection {
             }
         }
     }
-
+ */
     async fn heartbeat(&self) -> Result<()> {
         self.check_open()?;
         if self.inner.task_connect_count() + self.inner.task_associate_count() == 0 {

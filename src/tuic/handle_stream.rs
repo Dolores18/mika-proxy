@@ -47,7 +47,7 @@ impl TuicConnection {
     pub async fn accept_datagram(&self) -> anyhow::Result<Bytes> {
         Ok(self.conn.read_datagram().await?)
     }
-
+/*
     pub async fn handle_uni_stream(
         self: Arc<Self>,
         recv: RecvStream,
@@ -71,7 +71,7 @@ impl TuicConnection {
             tracing::warn!("[relay] incoming unidirectional stream error: {err}");
         }
     }
-
+*/
     pub async fn handle_bi_stream(
         self: Arc<Self>,
         send: SendStream,
@@ -88,6 +88,8 @@ impl TuicConnection {
         tracing::warn!("[relay] incoming bidirectional stream error: {err}");
     }
 
+}
+/* 
     pub async fn handle_datagram(self: Arc<Self>, dg: Bytes) {
         tracing::debug!("[relay] incoming datagram");
 
@@ -110,3 +112,4 @@ impl TuicConnection {
         }
     }
 }
+    */

@@ -1,10 +1,11 @@
-mod types;
+pub mod types;
 mod handle_stream;
+mod handle_task;
 use uuid::Uuid;
 use crate::tuic::types::UdpRelayMode;
 use tokio::time::Duration;
 use crate::tuic::types::CongestionControl;
-
+use anyhow::Result;
 use crate::tuic::types::TuicEndpoint;
 use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use crate::tuic::types::TuicConnection;
@@ -26,6 +27,7 @@ use quinn::{
 use tracing::debug;
 use crate::tls::DefaultTlsVerifier;
 use crate::tuic::types::ServerAddr;
+use crate::tuic::types::SocketAdderTrans;
 #[derive(Debug, Clone)]
 pub struct HandlerOptions {
     pub name: String,
@@ -63,6 +65,7 @@ pub struct Handler {
     ep: OnceCell<TuicEndpoint>,
     conn: AsyncMutex<Option<Arc<TuicConnection>>>,
     next_assoc_id: AtomicU16,
+    resolver: Arc<dyn Resolver>,
 }
 
 impl std::fmt::Debug for Handler {
@@ -75,12 +78,13 @@ impl std::fmt::Debug for Handler {
 
 
 impl Handler {
-    pub fn new(opts: HandlerOptions) -> Self {
+    pub fn new(opts: HandlerOptions, resolver: Arc<dyn Resolver>) -> Self {
         Self {
             opts,
             ep: OnceCell::new(),
             conn: AsyncMutex::new(None),
             next_assoc_id: AtomicU16::new(0),
+            resolver,
         }
     }
 
@@ -166,13 +170,12 @@ impl Handler {
 
     async fn get_conn(
         &self,
-        resolver: &ThreadSafeDNSResolver,
-        sess: &Session,
+        resolver:&dyn Resolver,
     ) -> Result<Arc<TuicConnection>> {
         let endpoint = self
             .ep
             .get_or_try_init(|| {
-                Self::init_endpoint(self.opts.clone(), resolver.clone(), sess)
+                Self::init_endpoint(self.opts.clone())
             })
             .await?;
 
@@ -196,35 +199,51 @@ impl Handler {
         tokio::time::timeout(self.opts.request_timeout, fut).await?
     }
 
+    // 修改内层连接函数，不接收initial_data
     async fn do_connect_stream(
         &self,
-        sess: &Session,
-        resolver: ThreadSafeDNSResolver,
-    ) -> Result<BoxedChainedStream> {
-        let conn = self.get_conn(&resolver, sess).await?;
-        let dest = sess.destination.clone().into_tuic();
-        let tuic_tcp = conn.connect_tcp(dest).await?;
-        let s = ChainedStreamWrapper::new(tuic_tcp);
-        s.append_to_chain(self.name()).await;
-        Ok(Box::new(s))
+        context: &mut FlowContext,
+    ) -> Result<Box<dyn Stream>> {
+        // 获取TUIC连接
+        let conn = self.get_conn(&*self.resolver).await?;
+        
+        // 给认证任务一些时间完成
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        
+        // 从context中获取目标地址
+        let dest_addr = context.remote_peer.clone().into_tuic();
+        
+        // 连接到目标服务器
+        let tuic_tcp = conn.connect_tcp(dest_addr).await?;
+        
+        // 使用CompatFlow适配器将tuic_tcp适配为Flow系统的Stream
+        let compat_stream = CompatFlow::new(tuic_tcp, 8192);
+        
+        // 只返回流对象，不处理initial_data
+        Ok(Box::new(compat_stream))
     }
 }
-
 
 #[async_trait]
-impl  StreamOutboundFactory for Handler {
-
-    async fn create_outbound(
-        &self,
-        context: &mut FlowContext,
-        initial_data: &[u8],
+impl StreamOutboundFactory for Handler {
+    async fn create_outbound<'s, 'a, 'b>(
+        &'s self,
+        context: &'a mut FlowContext,
+        initial_data: &'b [u8],
     ) -> FlowResult<(Box<dyn Stream>, Buffer)> {
-        let endpoint = self.get_conn(&resolver, sess).await?;
-        let (stream, buffer) = endpoint.create_outbound(context, initial_data).await?;
-        Ok((Box::new(stream), buffer))
+        // 先调用内层函数建立连接
+        let stream = self.do_connect_stream(context).await
+            .map_err(|e| {
+                FlowError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other, 
+                    format!("TUIC connection failed: {}", e)
+                ))
+            })?;
+        
+        // 不尝试写入initial_data，直接返回
+        // 框架会自动处理initial_data传输
+        
+        // 始终返回空Buffer给客户端
+        Ok((stream, Buffer::new()))
     }
-
-
-
 }
-
