@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::tuic::types::UdpRelayMode;
 use tokio::time::Duration;
 use crate::tuic::types::CongestionControl;
-use quinn::VarInt;
+
 use crate::tuic::types::TuicEndpoint;
 use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use crate::tuic::types::TuicConnection;
@@ -13,6 +13,19 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use crate::flow::StreamOutboundFactory;
 use crate::flow::*;
+use quinn::{
+    ClientConfig as QuinnConfig, Endpoint as QuinnEndpoint,
+    TransportConfig as QuinnTransportConfig, VarInt, congestion::CubicConfig,
+};
+use quinn::{
+    EndpointConfig, TokioRuntime,
+    congestion::{BbrConfig, NewRenoConfig},
+    crypto::rustls::QuicClientConfig,
+};
+
+use tracing::debug;
+use crate::tls::DefaultTlsVerifier;
+use crate::tuic::types::ServerAddr;
 #[derive(Debug, Clone)]
 pub struct HandlerOptions {
     pub name: String,
@@ -61,25 +74,6 @@ impl std::fmt::Debug for Handler {
 }
 
 
-
-
-#[async_trait]
-impl  StreamOutboundFactory for Handler {
-
-    async fn create_outbound(
-        &self,
-        context: &mut FlowContext,
-        initial_data: &[u8],
-    ) -> FlowResult<(Box<dyn Stream>, Buffer)> {
-        let endpoint = self.get_conn(&resolver, sess).await?;
-        let (stream, buffer) = endpoint.create_outbound(context, initial_data).await?;
-        Ok((Box::new(stream), buffer))
-    }
-
-
-
-}
-
 impl Handler {
     pub fn new(opts: HandlerOptions) -> Self {
         Self {
@@ -91,9 +85,7 @@ impl Handler {
     }
 
     async fn init_endpoint(
-        opts: HandlerOptions,
-        resolver: ThreadSafeDNSResolver,
-        sess: &Session,
+        opts: HandlerOptions
     ) -> Result<TuicEndpoint> {
         let verifier = DefaultTlsVerifier::new(None, opts.skip_cert_verify);
         let mut crypto =
@@ -131,23 +123,17 @@ impl Handler {
         quinn_config.transport_config(Arc::new(transport_config));
 
         let socket = {
-            if resolver.ipv6() {
-                new_udp_socket(
-                    Some((Ipv6Addr::UNSPECIFIED, 0).into()),
-                    sess.iface.clone(),
-                    #[cfg(target_os = "linux")]
-                    sess.so_mark,
-                )
-                .await?
-            } else {
-                new_udp_socket(
-                    Some((Ipv4Addr::UNSPECIFIED, 0).into()),
-                    None,
-                    #[cfg(target_os = "linux")]
-                    sess.so_mark,
-                )
-                .await?
-            }
+            // 直接使用IPv4绑定，不需要判断IPv6支持情况
+            let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
+            
+            // 设置socket选项
+            let std_socket = socket.into_std()?;
+            
+            // 设置为非阻塞模式
+            std_socket.set_nonblocking(true)?;
+            
+            // 转回tokio的UdpSocket
+            tokio::net::UdpSocket::from_std(std_socket)?
         };
 
         debug!("binding socket to: {:?}", socket.local_addr()?);
@@ -176,6 +162,7 @@ impl Handler {
 
         Ok(endpoint)
     }
+
 
     async fn get_conn(
         &self,
@@ -222,3 +209,22 @@ impl Handler {
         Ok(Box::new(s))
     }
 }
+
+
+#[async_trait]
+impl  StreamOutboundFactory for Handler {
+
+    async fn create_outbound(
+        &self,
+        context: &mut FlowContext,
+        initial_data: &[u8],
+    ) -> FlowResult<(Box<dyn Stream>, Buffer)> {
+        let endpoint = self.get_conn(&resolver, sess).await?;
+        let (stream, buffer) = endpoint.create_outbound(context, initial_data).await?;
+        Ok((Box::new(stream), buffer))
+    }
+
+
+
+}
+

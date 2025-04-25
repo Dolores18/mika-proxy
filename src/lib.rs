@@ -87,6 +87,7 @@ use dual_stack_factory::DualStackOutboundFactory;
 mod fakeip_mapback;
 pub use fakeip_mapback::{FakeIpMapBackStreamHandler, FakeIpMapBackDatagramSessionHandler};
 mod tuic;
+mod tls;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerStatus {
     pub server_address: String,
