@@ -263,6 +263,7 @@ impl StreamOutboundFactory for Handler {
         
         // 发送初始数据到TUIC流
         if !initial_data.is_empty() {
+            println!("开始发送初始数据到TUIC流");
             self.send_data(&mut *stream, initial_data).await?;
         }
         

@@ -38,11 +38,15 @@ impl TuicConnection {
     }
 
     pub async fn connect_tcp(&self, addr: Address) -> Result<Connect> {
+        println!("开始建立tuic_tcp链接");
         let addr_display = addr.to_string();
         tracing::info!("[tcp] {addr_display}");
 
         match self.inner.connect(addr).await {
-            Ok(conn) => Ok(conn),
+            Ok(conn) => {
+                println!("tuic_tcp链接建立成功");
+                Ok(conn)
+            },
             Err(err) => {
                 tracing::warn!(
                     "[tcp] failed initializing relay to {addr_display}: {err}"
