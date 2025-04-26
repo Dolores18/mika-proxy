@@ -110,6 +110,7 @@ impl<S: AsyncRead + AsyncWrite + Send + Unpin + 'static> Stream for CompatFlow<S
         Poll::Ready(Ok(SizeHint::Unknown { overhead: 0 }))
     }
     fn commit_rx_buffer(&mut self, buffer: Buffer) -> Result<(), (Buffer, FlowError)> {
+        //println!("开始获取接受缓冲区， 缓冲功区的长度是{}", buffer.len());
         self.rx_buf = Some(buffer);
         Ok(())
     }
@@ -122,8 +123,10 @@ impl<S: AsyncRead + AsyncWrite + Send + Unpin + 'static> Stream for CompatFlow<S
             rx_buf: rx_buf_opt,
             ..
         } = &mut *self;
-        let rx_buf = rx_buf_opt.as_mut().unwrap();
-
+        let rx_buf = match rx_buf_opt.as_mut() {
+            Some(buf) => buf,
+            None => panic!("Polling rx buffer without committing"),
+        };
         let mut read_buf = ReadBuf::uninit(rx_buf.spare_capacity_mut());
         if let Err(e) = ready!(Pin::new(inner).poll_read(cx, &mut read_buf)) {
             return Poll::Ready(Err((rx_buf_opt.take().unwrap(), e.into())));
