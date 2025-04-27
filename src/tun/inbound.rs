@@ -16,11 +16,14 @@ use crate::flow::{
 use crate::tun::routes::macos::Tunconfig;
 use crate::tun::routes::macos::add_route;
 // 完全移除stream模块的导入
-use crate::tun::tun_stream::{TunStreamHandler, TunTcpStream}; // 使用tun_stream模块
+use crate::tun::tun_stream::{TunStreamHandler, TunCompatFlow}; // 使用tun_stream模块
 use crate::tun::datagram::{TunDatagramSession, TunDatagramHandler};
 use crate::flow::*;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use crate::fakeip::FakeIp;
+// 删除这行，不再直接使用CompatFlow
+// use crate::flow::CompatFlow; // 添加CompatFlow的导入
+
 // 添加处理UDP连接的函数
 async fn handle_inbound_udp(
     udp_socket: netstack_smoltcp::UdpSocket,
@@ -205,31 +208,27 @@ pub fn get_runner(cfg: Tunconfig) -> Result<Option<Runner>, Box<dyn StdError + S
             
             while let Some((stream, local_addr, remote_addr)) = tcp_listener.next().await {
                 // 使用TunStreamHandler处理连接
-                if let Some(handler) = &stream_handler {
-                    let handler_clone = handler.clone();
+                if let Some(handler_arc) = stream_handler.clone() {
                     
                     tokio::spawn(async move {
                         info!("[inbound] 处理新的TCP连接: {} -> {}", remote_addr, local_addr);
                         
-                        // 直接创建TunTcpStream，无需中间适配器
-                        let tun_stream = TunTcpStream::new_af_sensitive(
-                            stream,
-                            local_addr, 
-                            remote_addr
-                        );
+                        // 使用TunCompatFlow代替CompatFlow
+                        let tun_compat_stream = TunCompatFlow::new(stream, 8192);
                         
-                        // 获取上下文
+                        // 2. 创建FlowContext
                         let context = Box::new(FlowContext::new_af_sensitive(
                             local_addr, 
                             DestinationAddr::from(remote_addr)
                         ));
                         
-                        // 包装为Stream类型并传递给handler
-                        let stream_box: Box<dyn Stream> = Box::new(tun_stream);
-                        handler_clone.on_stream(stream_box, Buffer::new(), context);
+                        // 3. 包装为Box<dyn Stream>并传递给handler
+                        let stream_box: Box<dyn Stream> = Box::new(tun_compat_stream);
+                        handler_arc.on_stream(stream_box, Buffer::new(), context);
                     });
                 } else {
-                    info!("[inbound] 警告: 没有配置TCP处理器，忽略连接: {} -> {}", remote_addr, local_addr);
+                    info!("[inbound] 警告: 没有配置TCP处理器或处理器已失效，忽略连接: {} -> {}", remote_addr, local_addr);
+                    // 可能需要关闭stream? stream.close();
                 }
             }
             Ok(())

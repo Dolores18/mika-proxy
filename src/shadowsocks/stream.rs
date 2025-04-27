@@ -84,7 +84,7 @@ where
     }
 
     fn commit_rx_buffer(&mut self, buffer: Buffer) -> Result<(), (Buffer, FlowError)> {
-        println!("准备接受缓冲区, 缓冲区的长度是{}", buffer.len());
+        //println!("准备接受缓冲区, 缓冲区的长度是{}", buffer.len());
         self.rx_buf = Some(buffer);
         Ok(())
     }
