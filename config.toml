@@ -57,6 +57,7 @@ dns_hijack = true
 routes = [
     "1.1.1.1/32",     # Cloudflare DNS
     "8.8.8.8/32",     # Google DNS
+    "223.6.6.6"       # 阿里云  DNS
     "198.18.0.0/16",  # FakeIP范围
     "149.154.160.0/20", #电报ip
     "fc00::1/18"      # IPv6支持
