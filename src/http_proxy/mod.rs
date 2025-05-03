@@ -3,11 +3,15 @@ pub(crate) mod util;
 use std::io::Write;
 use std::sync::Weak;
 
-use async_trait::async_trait;
-use base64::prelude::*;
-
 use crate::flow::*;
-
+use async_trait::async_trait;
+use base64::prelude::BASE64_STANDARD;
+use base64::prelude::*;
+use futures::future::poll_fn;
+use log::{debug, error, info};
+use std::net::IpAddr;
+use std::sync::Arc;
+use tokio::time::{timeout, Duration};
 const REQ_BEFORE_ADDR: &[u8] = b"CONNECT ";
 const REQ_AFTER_ADDR_PART: &[u8] = b" HTTP/1.1";
 const BASIC_AUTH_HEADER: &[u8] = b"\r\nAuthorization: Basic ";
@@ -119,4 +123,326 @@ impl StreamOutboundFactory for HttpProxyOutboundFactory {
         };
         Ok((lower, initial_res))
     }
+}
+
+pub struct HttpHandler {
+    auth_header: Option<Arc<String>>,
+    next: Weak<dyn StreamHandler>,
+}
+
+impl HttpHandler {
+    pub fn new(cred: Option<(&[u8], &[u8])>, next: Weak<dyn StreamHandler>) -> Self {
+        let auth_header = cred.map(|(user, pass)| {
+            let cred = format!(
+                "{}:{}",
+                String::from_utf8_lossy(user),
+                String::from_utf8_lossy(pass)
+            );
+            format!("Basic {}", base64::encode(cred.as_bytes()))
+        });
+
+        Self {
+            auth_header: auth_header.map(Arc::new),
+            next,
+        }
+    }
+}
+
+impl StreamHandler for HttpHandler {
+    fn on_stream(
+        &self,
+        mut lower: Box<dyn Stream>,
+        initial_data: Buffer,
+        mut context: Box<FlowContext>,
+    ) {
+        let next = match self.next.upgrade() {
+            Some(next) => next,
+            None => {
+                info!("Next handler is not available");
+                return;
+            }
+        };
+
+        info!("New HTTP CONNECT request received");
+
+        let auth_header = self.auth_header.clone();
+        tokio::spawn(async move {
+            let result = timeout(
+                Duration::from_secs(10),
+                handle_http_connect(&mut *lower, initial_data, auth_header),
+            )
+            .await;
+
+            match result {
+                Ok(Ok((initial_data, dest))) => {
+                    info!("HTTP CONNECT successful to {:?}", dest);
+                    context.remote_peer = dest;
+                    context.af_sensitive = false;
+                    next.on_stream(lower, initial_data, context);
+                }
+                Ok(Err(e)) => {
+                    error!("HTTP CONNECT error: {:?}", e);
+                }
+                Err(_) => {
+                    error!("HTTP CONNECT timeout");
+                }
+            }
+        });
+    }
+}
+
+use base64;
+
+#[derive(Debug)]
+pub enum DestRequest {
+    Connect(DestinationAddr),
+    Http {
+        method: String,
+        host: String,
+        port: u16,
+        path: String,
+    },
+}
+
+fn should_redirect(domain: &str, redirect_domains: &[&str]) -> bool {
+    redirect_domains.iter().any(|&d| domain.contains(d))
+}
+
+async fn handle_http_connect(
+    stream: &mut dyn Stream,
+    initial_data: Buffer,
+    auth_header: Option<Arc<String>>,
+) -> FlowResult<(Buffer, DestinationAddr)> {
+    let mut reader = StreamReader::new(4096, initial_data);
+    let mut headers = [httparse::EMPTY_HEADER; 32];
+    let mut req = httparse::Request::new(&mut headers);
+
+    // 读取和查找头部结束位置
+    let (header_end, header_data) = read_http_headers(stream, &mut reader).await?;
+
+    // 解析 HTTP 请求
+    match req.parse(&header_data[..header_end]) {
+        Ok(_) => (),
+        Err(_) => return Err(FlowError::UnexpectedData),
+    }
+
+    // 提取请求信息
+    let request = parse_request(&req)?;
+
+    match request {
+        DestRequest::Connect(dest) => {
+            // 验证认证信息
+            if let Some(auth_required) = auth_header {
+                let auth_valid = req
+                    .headers
+                    .iter()
+                    .find(|h| h.name.eq_ignore_ascii_case("Authorization"))
+                    .map(|h| String::from_utf8_lossy(h.value).eq(&*auth_required))
+                    .unwrap_or(false);
+
+                if !auth_valid {
+                    send(
+                        stream,
+                        b"HTTP/1.1 407 Proxy Authentication Required\r\n\
+                        Proxy-Authenticate: Basic realm=\"proxy\"\r\n\
+                        Connection: close\r\n\r\n",
+                    )
+                    .await?;
+                    return Err(FlowError::UnexpectedData);
+                }
+            }
+
+            // 对于 CONNECT 请求，直接建立隧道连接
+            let response = b"HTTP/1.1 200 Connection Established\r\n\
+                           Proxy-Agent: MyProxy/1.0\r\n\
+                           Connection: close\r\n\r\n";
+
+            send(stream, response).await?;
+            poll_fn(|cx| stream.poll_flush_tx(cx)).await?;
+
+            reader.advance(header_end + 4);
+            Ok((reader.into_buffer().unwrap_or_default(), dest))
+        }
+
+        DestRequest::Http { host, port, .. } => {
+            // 对于普通 HTTP 请求，可以考虑重定向
+            let redirect_domains = vec!["baidu.com"];
+
+            if redirect_domains.iter().any(|&d| host.contains(d)) {
+                // 返回重定向响应
+                let response = format!(
+                    "HTTP/1.1 302 Found\r\n\
+                     Location: http://{}\r\n\
+                     Connection: close\r\n\r\n",
+                    host
+                );
+                send(stream, response.as_bytes()).await?;
+                return Err(FlowError::UnexpectedData);
+            }
+
+            let dest = DestinationAddr {
+                host: if let Ok(ip) = host.parse::<IpAddr>() {
+                    HostName::Ip(ip)
+                } else {
+                    HostName::DomainName(host)
+                },
+                port,
+            };
+
+            Ok((reader.into_buffer().unwrap_or_default(), dest))
+        }
+    }
+}
+
+fn parse_request(req: &httparse::Request) -> FlowResult<DestRequest> {
+    match req.method {
+        Some("CONNECT") => {
+            if let Some(path) = req.path {
+                Ok(DestRequest::Connect(parse_host_port(path)?))
+            } else {
+                Err(FlowError::UnexpectedData)
+            }
+        }
+        Some(method) => {
+            // 解析普通HTTP请求
+            let (host, port) = extract_host_port_from_headers(req)?;
+            let path = req.path.ok_or(FlowError::UnexpectedData)?;
+
+            // 检查请求的协议是否为 HTTP 或 HTTPS
+            if !path.starts_with("http://") && !path.starts_with("https://") {
+                return Err(FlowError::UnexpectedData);
+            }
+
+            Ok(DestRequest::Http {
+                method: method.to_string(),
+                host,
+                port,
+                path: path.to_string(),
+            })
+        }
+        None => Err(FlowError::UnexpectedData),
+    }
+}
+
+fn extract_host_port_from_headers(req: &httparse::Request) -> FlowResult<(String, u16)> {
+    // 首先尝试从Host头部获取
+    if let Some(host_header) = req
+        .headers
+        .iter()
+        .find(|h| h.name.eq_ignore_ascii_case("Host"))
+    {
+        let host_str =
+            std::str::from_utf8(host_header.value).map_err(|_| FlowError::UnexpectedData)?;
+
+        // 如果Host头部包含端口
+        if let Some((host, port_str)) = host_str.rsplit_once(':') {
+            let port = port_str.parse().map_err(|_| FlowError::UnexpectedData)?;
+            Ok((host.to_string(), port))
+        } else {
+            // 没有端口，使用默认的80端口
+            Ok((host_str.to_string(), 80))
+        }
+    } else {
+        // 尝试从URL中提取
+        if let Some(path) = req.path {
+            if path.starts_with("http://") || path.starts_with("https://") {
+                if let Ok(url) = url::Url::parse(path) {
+                    let host = url.host_str().ok_or(FlowError::UnexpectedData)?;
+                    let port = url
+                        .port()
+                        .unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
+                    return Ok((host.to_string(), port));
+                }
+            }
+        }
+        Err(FlowError::UnexpectedData)
+    }
+}
+
+// 其他辅助函数保持不变
+async fn read_http_headers(
+    stream: &mut dyn Stream,
+    reader: &mut StreamReader,
+) -> FlowResult<(usize, Vec<u8>)> {
+    let mut header_data = Vec::new();
+    let mut should_break = false;
+
+    // 设置一个总体超时
+    let timeout = tokio::time::Duration::from_secs(1); // 10秒总超时
+    let start_time = tokio::time::Instant::now();
+
+    loop {
+        // 检查是否超时
+        if start_time.elapsed() > timeout {
+            should_break = true; // 改用 should_break 而不是直接返回错误
+        }
+
+        // 如果需要break就退出循环
+        if should_break {
+            break;
+        }
+
+        let _ = reader
+            .peek_at_least(stream, 1, |data| {
+                if header_data.is_empty() {
+                    if data.is_empty()
+                        || !(data.starts_with(b"GET")
+                            || data.starts_with(b"POST")
+                            || data.starts_with(b"CONNECT"))
+                    {
+                        should_break = true;
+                    }
+                }
+
+                header_data.extend_from_slice(data);
+                if header_data.len() >= 4096 {
+                    return Err(FlowError::UnexpectedData);
+                }
+                Ok(())
+            })
+            .await?;
+
+        if let Some(pos) = find_header_end(&header_data) {
+            return Ok((pos, header_data));
+        }
+    }
+
+    // 循环结束后统一处理
+    Err(FlowError::UnexpectedData)
+}
+fn find_header_end(data: &[u8]) -> Option<usize> {
+    if data.len() < 4 {
+        return None;
+    }
+
+    for i in 0..data.len() - 3 {
+        if &data[i..i + 4] == b"\r\n\r\n" {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn parse_host_port(addr: &str) -> FlowResult<DestinationAddr> {
+    let (host, port_str) = addr.rsplit_once(':').ok_or(FlowError::UnexpectedData)?;
+
+    let port = port_str.parse().map_err(|_| FlowError::UnexpectedData)?;
+
+    let host = if let Ok(ip) = host.parse::<IpAddr>() {
+        HostName::Ip(ip)
+    } else {
+        HostName::DomainName(host.to_string())
+    };
+
+    Ok(DestinationAddr { host, port })
+}
+
+async fn send(stream: &mut dyn Stream, data: &[u8]) -> FlowResult<()> {
+    let len = match data.len().try_into() {
+        Ok(len) => len,
+        Err(_) => return Ok(()),
+    };
+    let mut tx_buf = poll_fn(|cx| stream.poll_tx_buffer(cx, len)).await?;
+    tx_buf.extend(data);
+    stream.commit_tx_buffer(tx_buf)
 }

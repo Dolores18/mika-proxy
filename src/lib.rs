@@ -62,6 +62,7 @@ use crate::host_resolver::doh_adapter::DohDatagramAdapterFactory;
 use host_resolver::HostResolver;
 mod http_proxy;
 use http_proxy::HttpProxyOutboundFactory;
+use http_proxy::HttpHandler;
 // 从 forward 模块导入 DatagramHandler
 
 mod rule_dispatcher;
@@ -523,6 +524,10 @@ pub async fn start_proxy_server(
         None,
         Arc::downgrade(&stream_forward_resolver) as Weak<dyn StreamHandler>,
     ));
+    let http_handler = Arc::new(HttpHandler::new(
+        None,
+        Arc::downgrade(&stream_forward_resolver) as Weak<dyn StreamHandler>,
+    ));
     let listen_addr_v4 = app_config.client.listen_addr_v4.clone();
     let listen_addr_v6 = app_config.client.listen_addr_v6.clone();
 
@@ -532,12 +537,12 @@ pub async fn start_proxy_server(
     );
 
     let handle_v4 = listen_tcp(
-        Arc::downgrade(&socks5_handler) as Weak<dyn StreamHandler>,
+        Arc::downgrade(&http_handler) as Weak<dyn StreamHandler>,
         listen_addr_v4,
     )?;
 
     let handle_v6 = listen_tcp(
-        Arc::downgrade(&socks5_handler) as Weak<dyn StreamHandler>,
+        Arc::downgrade(&http_handler) as Weak<dyn StreamHandler>,
         listen_addr_v6,
     )?;
 
