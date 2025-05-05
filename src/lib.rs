@@ -1148,10 +1148,10 @@ pub async fn start_quic_server(
     info!("启动 QUIC 代理服务器");
     
     // 硬编码服务器配置
-    let server_addr = "45.196.238.135".to_string();
-    let server_port = 36754;
-    let uuid = Uuid::parse_str("c69a1361-6dfc-32fc-5d4c-099e390ca09d").unwrap();
-    let password = "MFvf1hoQ".to_string();
+    let server_addr = "47.79.39.75".to_string();
+    let server_port = 1005;
+    let uuid = Uuid::parse_str("d39c46e2-71c1-49aa-b9a8-419ef924ed6b").unwrap();
+    let password = "4gYk7WzL9q3e".to_string();
     
     info!("QUIC 服务器配置: {}:{}", server_addr, server_port);
     
