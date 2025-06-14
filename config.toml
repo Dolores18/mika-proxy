@@ -2,8 +2,10 @@
 [servers]
 # 可以添加多个服务器地址
 addresses = [
-    "107.174.218.153:1080", 
+   "107.174.218.153:1080", 
     "47.79.39.75:1080",
+ 
+
  
   
       
@@ -22,7 +24,7 @@ global_doh = "https://8.8.8.8/dns-query"
 doh = "http://127.0.0.1:5353/dns-query"
 # 备用DoH服务器
 adg = "http://94.140.14.14/resolve"
-pub = "https://doh.pub/dns-query"
+pub_dns = "https://doh.pub/dns-query"
 
 # 功能配置
 [features]
@@ -32,13 +34,19 @@ ss_key = "JtivfX27TuAkUkfgFXGuEQ=="
 # 客户端配置
 [client]
 # TCP监听地址
-listen_addr_v4 = "127.0.0.1:1081"
-listen_addr_v6 = "[::]:1081"
+listen_addr_v4 = "0.0.0.0:1080"
+listen_addr_v6 = "[::]:1088"
 # UDP监听地址
-udp_listen_addr_v4 = "127.0.0.1:1085"
-udp_listen_addr_v6 = "[::]:1085"
+udp_listen_addr_v4 = "0.0.0.0:1080"
+udp_listen_addr_v6 = "[::]:1080"
 # GeoIP数据库路径
 geoip_db_path = "GeoLite2-Country.mmdb"
+# 代理服务器地址
+proxy_addr = "127.0.0.1"
+# 代理服务器端口
+proxy_port = 9090
+# 请求超时时间（毫秒）
+request_timeout = 5000
 
 # TUN设备配置
 [tun]

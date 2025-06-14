@@ -528,8 +528,8 @@ pub async fn start_proxy_server(
         None,
         Arc::downgrade(&stream_forward_resolver) as Weak<dyn StreamHandler>,
     ));
-    let listen_addr_v4 = app_config.client.listen_addr_v4.clone();
-    let listen_addr_v6 = app_config.client.listen_addr_v6.clone();
+    let listen_addr_v4 = "127.0.0.1:1082";
+    let listen_addr_v6 = "[::]:1082";
 
     println!(
         "Rule-based proxy server listening on {} (IPv4) and {} (IPv6)",
