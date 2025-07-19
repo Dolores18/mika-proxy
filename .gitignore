@@ -29,3 +29,4 @@ Breakpoints_v2.xcbkptlist
 
 # Rust 特有文件
 **/*.rs.bk
+proxy_cache.db

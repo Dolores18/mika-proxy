@@ -249,7 +249,7 @@ impl<
                 }
             }
         }
-        
+        /* 
         for (i, chunk) in buf.chunks(16).enumerate() {
             let hex_values: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
             let ascii_values: String = chunk.iter()
@@ -257,7 +257,7 @@ impl<
                 .collect();
             println!("  {:04x}: {:48} {}", i * 16, hex_values.join(" "), ascii_values);
         }
-        
+        */
         match dst.host {
             HostName::Ip(IpAddr::V4(v4)) => {
                 let test_ip = Ipv4Addr::new(223,5,5,5);
