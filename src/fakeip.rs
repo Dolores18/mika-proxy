@@ -168,14 +168,27 @@ impl FakeIp {
 }
 
 #[async_trait]
+#[async_trait]
 impl Resolver for FakeIp {
     async fn resolve_ipv4(&self, domain: String) -> ResolveResultV4 {
+        // 检查是否为本地地址，直接返回127.0.0.1，不分配fakeip
+        if domain == "127.0.0.1" || domain == "localhost" {
+            println!("🏠 检测到本地地址查询: {} -> 直接返回 127.0.0.1", domain);
+            return Ok(smallvec![[127, 0, 0, 1].into()]);
+        }
+        
         Ok(smallvec![(((self.prefix_v4 as u32) << 16)
             | (self.lookup_or_alloc(domain) as u32))
             .to_be_bytes()
             .into()])
     }
     async fn resolve_ipv6(&self, domain: String) -> ResolveResultV6 {
+        // 检查是否为本地地址，直接返回::1，不分配fakeip
+        if domain == "::1" || domain == "localhost" {
+            println!("🏠 检测到本地地址查询(IPv6): {} -> 直接返回 ::1", domain);
+            return Ok(smallvec![[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1].into()]);
+        }
+        
         let mut bytes = [0; 16];
         bytes[..14].copy_from_slice(&self.prefix_v6);
         let index = self.lookup_or_alloc(domain);
@@ -184,7 +197,6 @@ impl Resolver for FakeIp {
         Ok(smallvec![bytes.into()])
     }
 }
-
 impl Drop for FakeIp {
     fn drop(&mut self) {
         self.save_cache();
