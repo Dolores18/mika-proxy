@@ -44,6 +44,7 @@ pub struct FeaturesConfig {
 pub struct DomainsConfig {
     #[serde(default)]
     pub direct: Vec<String>,
+    pub proxy: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

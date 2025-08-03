@@ -1,3 +1,4 @@
+
 #![feature(generic_const_exprs)]
 #![feature(stmt_expr_attributes)]
 #![feature(array_chunks)]
@@ -228,6 +229,42 @@ fn load_direct_domains(app_config: &config::AppConfig) -> HashSet<String> {
     }
 }
 
+// 从文件加载quanx规则
+fn load_quanx_rules_from_file(file_path: &str) -> Vec<String> {
+    println!("从文件加载quanx规则: {}", file_path);
+    
+    match std::fs::read_to_string(file_path) {
+        Ok(content) => {
+            let rules: Vec<String> = content
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .filter(|line| !line.starts_with('#'))
+                .map(|line| line.trim().to_string())
+                .collect();
+                
+            println!("成功从文件加载quanx规则，共 {} 条规则", rules.len());
+            
+            // 打印前几条规则作为示例
+            let sample_count = std::cmp::min(5, rules.len());
+            if sample_count > 0 {
+                println!("规则示例:");
+                for (idx, rule) in rules.iter().take(sample_count).enumerate() {
+                    println!("   [{}] {}", idx + 1, rule);
+                }
+                
+                if rules.len() > sample_count {
+                    println!("   ... 还有 {} 条规则", rules.len() - sample_count);
+                }
+            }
+            
+            rules
+        }
+        Err(e) => {
+            println!("⚠️ 无法读取规则文件 {}: {}", file_path, e);
+            Vec::new()
+        }
+    }
+}
 // 修改 init_rule_dispatcher 函数
 /*
 pub fn init_rule_dispatcher() -> Arc<RuleDispatcher> {
@@ -694,50 +731,16 @@ pub async fn start_dispatcher_server(
 
     let doh_factories = vec![DohDatagramAdapterFactory::new(
         app_config.dns.doh.parse().unwrap(), // 使用配置中的国际 DoH 服务器
-        Arc::downgrade(&doh_tcp_factory) as Weak<dyn StreamOutboundFactory>,
+        Arc::downgrade(&doh_ss_factory) as Weak<dyn StreamOutboundFactory>,
     )];
     println!("Created DoH client for URL: {}", app_config.dns.doh);
 
     // 创建代理解析器
     let proxy_resolver: Arc<dyn Resolver> = Arc::new(HostResolver::new(vec![], doh_factories));
 
-    // 创建DNS服务器用于缓存
-    // 创建数据库连接
-    let dns_db_path = std::path::Path::new("./proxy_cache.db");
-    let dns_db = match data::Database::open(dns_db_path) {
-        Ok(db) => {
-            info!("✅ 成功打开/创建DNS缓存数据库: {:?}", dns_db_path);
-            Some(db)
-        },
-        Err(e) => {
-            error!("❌ 无法打开/创建DNS缓存数据库: {:?} - 错误: {:?}", dns_db_path, e);
-            None
-        }
-    };
-    
-    // 使用新创建的数据库连接
-    let dns_plugin_cache = data::PluginCache::new(data::PluginId(1), dns_db);
-    let dns_server = Arc::new(DnsServer::new(
-        100, // 并发限制
-        Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
-        3600, // TTL秒数 (1小时)
-        dns_plugin_cache,
-    ));
-    
-    // 启动缓存定期写入任务
-    tokio::spawn(cache_writer(dns_server.clone()));
-    println!("✅ DNS服务器缓存系统已启动，解析结果将持久化保存到数据库");
-    
-    // 创建缓存解析器，先查询缓存，未命中再使用DoH
-    let caching_resolver: Arc<dyn Resolver> = Arc::new(host_resolver::CachingResolver::new(
-        dns_server.clone(),
-        proxy_resolver.clone()
-    ));
-    println!("✅ DNS缓存解析器已创建");
-
     // 3. 创建直连出站工厂
     let direct_outbound_factory = Arc::new(SocketOutboundFactory {
-        resolver: Arc::downgrade(&caching_resolver),
+        resolver: Arc::downgrade(&direct_resolver),
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
@@ -774,16 +777,21 @@ pub async fn start_dispatcher_server(
         stat: stat.clone(),
     });
 
+    // 创建一个规则分发全局解析器
+    let proxy_with_resolver = Arc::new(StreamForwardResolver {
+        resolver: Arc::downgrade(&proxy_resolver),
+        next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
+    });
 
-    // 6. 创建规则分发器
+   // 6. 创建规则分发器
     let rule_dispatcher = Arc::new_cyclic(|me| {
         let mut builder = RuleDispatcherBuilder::default();
-        builder.set_resolver(Some(Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>));
+        builder.set_resolver(Some(Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>));
 
         // 创建直连动作
         let direct_action = Action {
             tcp_next: Arc::downgrade(&direct_forward_handler) as Weak<dyn StreamHandler>,
-            resolver: Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>,
+            resolver: Arc::downgrade(&direct_resolver) as Weak<dyn Resolver>,
         };
         println!("✅ 创建直连动作成功");
 
@@ -791,91 +799,94 @@ pub async fn start_dispatcher_server(
             .add_action(direct_action)
             .expect("Failed to add direct action");
 
-        // 创建代理动作
+        // 创建代理动作,代理动作不能经过steam_forward_handler
         let proxy_action = Action {
             tcp_next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
-            resolver: Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>,
+            resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
         };
         println!("✅ 创建代理动作成功");
 
         let proxy_handle = builder
             .add_action(proxy_action)
             .expect("Failed to add proxy action");
-
-        // 创建 Google 相关域名规则集
-        let google_domains = vec![
-            // 子域名匹配（以 . 开头）
-            "google.com",
-            "google-analytics.com",
-            "googleapis.com",
-            "gstatic.com",
-            "doubleclick.net",
-            "www.google-analytics.com",
-            "www.googleapis.com",
-            "www.gstatic.com",
-            "www.doubleclick.net",
-            "beacons.gcp.gvt2.com",
-        ];
-
-        // 使用 build_surge_domainset 构建域名规则
-        if let Some(domain_rule_set) =
-            RuleSet::build_surge_domainset(google_domains.iter().map(|s| *s), proxy_handle)
-        {
-            println!("✅ 成功创建 Google 域名规则集");
-
-            // 直接使用构建好的规则集
-            let mut rule_set = domain_rule_set;
-
-            // 添加 GeoIP 规则
-            if let Some(geoip_db) = match std::fs::read(&app_config.client.geoip_db_path) {
-                Ok(data) => {
-                    println!("✅ 成功加载 GeoIP 数据库");
-                    let code_action_mapping = vec![
-                        ("CN".to_string(), direct_handle),
-                        ("US".to_string(), proxy_handle),
-                    ]
-                    .into_iter();
-
-                    RuleSet::build_dst_geoip_rule(code_action_mapping, Arc::from(data))
-                }
-                Err(e) => {
-                    println!("❌ 无法加载 GeoIP 数据库: {}", e);
-                    None
-                }
-            } {
-                rule_set.dst_geoip = geoip_db.dst_geoip;
-                rule_set.first_resolving_rule_id = Some(0);
+            
+        // 创建一个BTreeMap来映射动作名称到ActionHandle
+        let mut action_map = std::collections::BTreeMap::new();
+        action_map.insert("direct", direct_handle);
+        action_map.insert("proxy", proxy_handle);
+        
+        // 尝试从rules.txt文件加载规则
+        let quanx_rules = load_quanx_rules_from_file("rules.txt");
+        
+        // 计算域名规则数量（不包括GeoIP规则）
+        let domain_rules_count = quanx_rules.iter()
+            .filter(|rule| !rule.starts_with("geoip"))
+            .count();
+        
+        println!("📊 域名规则总数: {}", domain_rules_count);
+        
+        // 读取GeoIP数据库
+        let geoip_db = match std::fs::read(&app_config.client.geoip_db_path) {
+            Ok(data) => {
+                println!("✅ 成功加载 GeoIP 数据库");
+                Some(Arc::from(data))
             }
-
+            Err(e) => {
+                println!("⚠️ 无法加载 GeoIP 数据库: {}", e);
+                None
+            }
+        };
+        
+        // 使用quanx_filter构建完整规则集
+        if let Some(rule_set) = RuleSet::load_quanx_filter(
+            quanx_rules.iter().map(|s| s.as_str()),
+            &action_map,
+            geoip_db
+        ) {
+            println!("✅ 使用quanx_filter成功创建规则集");
+            
+            let mut rule_set = rule_set;
+            let resolving_rule_id = domain_rules_count as u32 + 1;
+            rule_set.first_resolving_rule_id = Some(resolving_rule_id);
+            
             // 创建分发器
             let fallback_action = Action {
-                tcp_next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
-                resolver: Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>,
+                tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
+                resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
             };
 
             builder.build(rule_set, fallback_action, me.clone())
         } else {
-            panic!("Failed to create domain rule set");
+            println!("❌ 无法创建域名规则集");
+            
+            let fallback_action = Action {
+                tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
+                resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
+            };
+            
+            builder.build(RuleSet::default(), fallback_action, me.clone())
         }
     });
 
-    // 添加MapBackStreamHandler将IP地址映射回域名
-    let mapback_handler = Arc::new(MapBackStreamHandler::new(
-        &dns_server,
-        Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>
-    ));
-
-    //创建doh响应结果映射回去
-    let stream_forward_resolver = Arc::new(StreamForwardResolver {
-        resolver: Arc::downgrade(&caching_resolver),
-        next: Arc::downgrade(&mapback_handler) as Weak<dyn StreamHandler>,
-    });
-    
-    // 7. 创建 SOCKS5 处理器并启动服务器
+    // ⚠️ 重要修改：域名解析流程
+    // 让规则分发器直接处理域名，而不是先解析为IP
+    // 删除转发解析器，直接使用规则分发器
     let socks5_handler = Arc::new(Socks5Handler::new(
         None,
-        Arc::downgrade(&stream_forward_resolver) as Weak<dyn StreamHandler>,
+        Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>,
     ));
+    
+    // 移除原来的解析器组合
+    // let stream_forward_resolver = Arc::new(StreamForwardResolver {
+    //     resolver: Arc::downgrade(&proxy_resolver),
+    //     next: Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>,
+    // });
+    
+    // let socks5_handler = Arc::new(Socks5Handler::new(
+    //     None,
+    //     Arc::downgrade(&stream_forward_resolver) as Weak<dyn StreamHandler>,
+    // ));
+
     let listen_addr_v4 = app_config.client.listen_addr_v4.clone();
     let listen_addr_v6 = app_config.client.listen_addr_v6.clone();
 
@@ -1190,17 +1201,137 @@ pub async fn start_quic_server(
     // 创建 TUIC 处理器
     let tuic_handler = Arc::new(tuic::Handler::new(tuic_options, resolver.clone()));
     
-    // 创建 TCP 转发处理器，使用 TUIC 处理器作为出站工厂
-    let tcp_handler = Arc::new(forward::StreamForwardHandler {
+    // 创建专门用于 DoH 的 TCP 工厂
+    let doh_tcp_factory = Arc::new(SocketOutboundFactory {
+        resolver: Arc::downgrade(&resolver),
+        bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+        bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
+    });
+
+    // 创建 DoH 工厂时使用 TUIC 处理器作为代理链路
+    let doh_factories = vec![DohDatagramAdapterFactory::new(
+        app_config.dns.doh.parse().unwrap(),
+        Arc::downgrade(&tuic_handler) as Weak<dyn StreamOutboundFactory>,
+    )];
+    println!("Created DoH client for URL: {}", app_config.dns.doh);
+
+    // 创建代理解析器
+    let proxy_resolver: Arc<dyn Resolver> = Arc::new(HostResolver::new(vec![], doh_factories));
+
+    // 创建直连出站工厂
+    let direct_outbound_factory = Arc::new(SocketOutboundFactory {
+        resolver: Arc::downgrade(&resolver),
+        bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+        bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
+    });
+ 
+    // 创建直连转发处理器
+    let direct_forward_handler = Arc::new(forward::StreamForwardHandler {
+        outbound: Arc::downgrade(&direct_outbound_factory) as Weak<dyn StreamOutboundFactory>,
+        request_timeout: 10000,
+        stat: stat.clone(),
+    });
+
+    // 创建代理转发处理器，使用 TUIC 处理器作为出站工厂
+    let proxy_forward_handler = Arc::new(forward::StreamForwardHandler {
         outbound: Arc::downgrade(&tuic_handler) as Weak<dyn StreamOutboundFactory>,
         request_timeout: 10000,
         stat: stat.clone(),
+    });
+
+    // 创建带解析器的代理处理器
+    let proxy_with_resolver = Arc::new(StreamForwardResolver {
+        resolver: Arc::downgrade(&proxy_resolver),
+        next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
+    });
+
+    // 创建规则分发器
+    let rule_dispatcher = Arc::new_cyclic(|me| {
+        let mut builder = RuleDispatcherBuilder::default();
+        builder.set_resolver(Some(Arc::downgrade(&resolver) as Weak<dyn Resolver>));
+
+        // 创建直连动作
+        let direct_action = Action {
+            tcp_next: Arc::downgrade(&direct_forward_handler) as Weak<dyn StreamHandler>,
+            resolver: Arc::downgrade(&resolver) as Weak<dyn Resolver>,
+        };
+
+        let direct_handle = builder
+            .add_action(direct_action)
+            .expect("Failed to add direct action");
+
+        // 创建代理动作
+        let proxy_action = Action {
+            tcp_next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
+            resolver: Arc::downgrade(&resolver) as Weak<dyn Resolver>,
+        };
+
+        let proxy_handle = builder
+            .add_action(proxy_action)
+            .expect("Failed to add proxy action");
+            
+        // 创建一个BTreeMap来映射动作名称到ActionHandle
+        let mut action_map = std::collections::BTreeMap::new();
+        action_map.insert("direct", direct_handle);
+        action_map.insert("proxy", proxy_handle);
+        
+        // 尝试从rules.txt文件加载规则
+        let quanx_rules = load_quanx_rules_from_file("rules.txt");
+        
+        // 计算域名规则数量（不包括GeoIP规则）
+        let domain_rules_count = quanx_rules.iter()
+            .filter(|rule| !rule.starts_with("geoip"))
+            .count();
+        
+        println!("📊 域名规则总数: {}", domain_rules_count);
+        
+        // 读取GeoIP数据库
+        let geoip_db = match std::fs::read(&app_config.client.geoip_db_path) {
+            Ok(data) => {
+                println!("✅ 成功加载 GeoIP 数据库");
+                Some(Arc::from(data))
+            }
+            Err(e) => {
+                println!("⚠️ 无法加载 GeoIP 数据库: {}", e);
+                None
+            }
+        };
+        
+        // 使用quanx_filter构建完整规则集
+        if let Some(rule_set) = RuleSet::load_quanx_filter(
+            quanx_rules.iter().map(|s| s.as_str()),
+            &action_map,
+            geoip_db
+        ) {
+            println!("✅ 使用quanx_filter成功创建规则集");
+            
+            let mut rule_set = rule_set;
+            let resolving_rule_id = domain_rules_count as u32 + 1;
+            rule_set.first_resolving_rule_id = Some(resolving_rule_id);
+            
+            // 创建分发器
+            let fallback_action = Action {
+                tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
+                resolver: Arc::downgrade(&resolver) as Weak<dyn Resolver>,
+            };
+
+            builder.build(rule_set, fallback_action, me.clone())
+        } else {
+            println!("❌ 无法创建域名规则集");
+            
+            let fallback_action = Action {
+                tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
+                resolver: Arc::downgrade(&resolver) as Weak<dyn Resolver>,
+            };
+            
+            builder.build(RuleSet::default(), fallback_action, me.clone())
+        }
     });
     
     // 创建 SOCKS5 处理器
     let socks5_handler = Arc::new(Socks5Handler::new(
         None,
-        Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>,
+        Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>,
     ));
     
     // 从配置中获取监听地址

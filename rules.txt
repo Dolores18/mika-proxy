@@ -1,0 +1,68 @@
+# Quantumult X规则文件
+# 按照domain-suffix,域名,动作的格式组织
+
+# 直连域名列表
+# 百度相关
+domain-suffix,baidu.com,direct
+domain-suffix,bdimg.com,direct
+domain-suffix,bdstatic.com,direct
+domain-suffix,baidubce.com,direct
+domain-suffix,bcebos.com,direct
+
+# B站相关
+domain-suffix,bilibili.com,direct
+domain-suffix,hdslb.com,direct
+domain-suffix,bilivideo.com,direct
+domain-suffix,bilivideo.cn,direct
+domain-suffix,biliapi.net,direct
+domain-suffix,acg.tv,direct
+domain-suffix,acgvideo.com,direct
+domain-suffix,b23.tv,direct
+domain-suffix,bigfun.cn,direct
+domain-suffix,bigfunapp.cn,direct
+domain-suffix,biliapi.com,direct
+domain-suffix,biligame.com,direct
+domain-suffix,biligame.net,direct
+domain-suffix,im9.com,direct
+domain-suffix,smtcdns.net,direct
+
+# 其他中国网站
+domain-suffix,qq.com,direct
+domain-suffix,zhihu.com,direct
+domain-suffix,zhimg.com,direct
+
+# 代理域名列表
+# 谷歌相关
+domain-suffix,google.com,proxy
+domain-suffix,google-analytics.com,proxy
+domain-suffix,googleapis.com,proxy
+domain-suffix,gstatic.com,proxy
+domain-suffix,doubleclick.net,proxy
+domain-suffix,www.google-analytics.com,proxy
+domain-suffix,www.googleapis.com,proxy
+domain-suffix,www.gstatic.com,proxy
+domain-suffix,www.doubleclick.net,proxy
+domain-suffix,beacons.gcp.gvt2.com,proxy
+domain-suffix,linux.do,proxy
+
+# youtube
+domain-suffix,youtube.com,proxy
+domain-suffix,youtu.be,proxy
+domain-suffix,youtube-nocookie.com,proxy
+domain-suffix,googlevideo.com,proxy
+domain-suffix,ytimg.com,proxy
+domain-suffix,youtube.googleapis.com,proxy
+domain-suffix,youtubei.googleapis.com,proxy
+domain-suffix,apis.google.com,proxy
+domain-suffix,googleusercontent.com,proxy
+domain-suffix,gstatic.com,proxy
+
+# telegram
+host-suffix,149.154.175.54,proxy
+
+# GeoIP规则
+geoip,CN,direct
+geoip,US,proxy
+
+# 最终规则 - 不匹配任何规则时使用
+final,proxy 
