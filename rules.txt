@@ -25,12 +25,15 @@ domain-suffix,biligame.com,direct
 domain-suffix,biligame.net,direct
 domain-suffix,im9.com,direct
 domain-suffix,smtcdns.net,direct
+domain-suffix,biliimg.com,direct
 
 # 其他中国网站
 domain-suffix,qq.com,direct
 domain-suffix,zhihu.com,direct
 domain-suffix,zhimg.com,direct
-
+domain-suffix,ciyuancheng.net,direct
+domain-suffix,linux.do,proxy
+domain-suffix,anime.girigirilove.com,direct
 # 代理域名列表
 # 谷歌相关
 domain-suffix,google.com,proxy
@@ -40,10 +43,10 @@ domain-suffix,gstatic.com,proxy
 domain-suffix,doubleclick.net,proxy
 domain-suffix,www.google-analytics.com,proxy
 domain-suffix,www.googleapis.com,proxy
+domain-suffix,gemini.google.com,proxy
 domain-suffix,www.gstatic.com,proxy
 domain-suffix,www.doubleclick.net,proxy
 domain-suffix,beacons.gcp.gvt2.com,proxy
-domain-suffix,linux.do,proxy
 
 # youtube
 domain-suffix,youtube.com,proxy
@@ -57,6 +60,10 @@ domain-suffix,apis.google.com,proxy
 domain-suffix,googleusercontent.com,proxy
 domain-suffix,gstatic.com,proxy
 
+# 备用DoH服务器
+domain-suffix,cloudflare-dns.com,proxy
+
+
 # telegram
 host-suffix,149.154.175.54,proxy
 
@@ -64,5 +71,10 @@ host-suffix,149.154.175.54,proxy
 geoip,CN,direct
 geoip,US,proxy
 
+#cursor规则
+domain-suffix,api2.cursor.sh,proxy
+
+#AI
+domain-suffix,deepseek.com,proxy
 # 最终规则 - 不匹配任何规则时使用
 final,proxy 

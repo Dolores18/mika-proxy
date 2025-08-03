@@ -93,3 +93,21 @@ direct = [
     "bilivideo.cn",
     "biliapi.net"
 ] 
+# #proxy
+proxy = [
+    # 谷歌相关
+    "google.com",
+    "google-analytics.com",
+    "googleapis.com",
+    "gstatic.com",
+    "doubleclick.net",
+    "www.google-analytics.com",
+    "www.googleapis.com",
+    "www.gstatic.com",
+    "www.doubleclick.net",
+    "beacons.gcp.gvt2.com",
+
+    #linux.do相关
+    "linux.do"
+
+] 

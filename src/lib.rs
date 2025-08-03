@@ -1201,13 +1201,6 @@ pub async fn start_quic_server(
     // 创建 TUIC 处理器
     let tuic_handler = Arc::new(tuic::Handler::new(tuic_options, resolver.clone()));
     
-    // 创建专门用于 DoH 的 TCP 工厂
-    let doh_tcp_factory = Arc::new(SocketOutboundFactory {
-        resolver: Arc::downgrade(&resolver),
-        bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
-        bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
-    });
-
     // 创建 DoH 工厂时使用 TUIC 处理器作为代理链路
     let doh_factories = vec![DohDatagramAdapterFactory::new(
         app_config.dns.doh.parse().unwrap(),
