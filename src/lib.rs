@@ -1202,8 +1202,11 @@ pub async fn start_quic_server(
     let tuic_handler = Arc::new(tuic::Handler::new(tuic_options, resolver.clone()));
     
     // 创建 DoH 工厂时使用 TUIC 处理器作为代理链路
+    println!("🔍 配置文件中的DoH服务器: {}", app_config.dns.doh);
+    let doh_url = app_config.dns.doh.parse().unwrap();
+    println!("🔍 解析后的DoH URL: {:?}", doh_url);
     let doh_factories = vec![DohDatagramAdapterFactory::new(
-        app_config.dns.doh.parse().unwrap(),
+        doh_url,
         Arc::downgrade(&tuic_handler) as Weak<dyn StreamOutboundFactory>,
     )];
     println!("Created DoH client for URL: {}", app_config.dns.doh);

@@ -15,11 +15,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     info!("开始启动 QUIC 代理服务器");
     
-    // 使用默认配置
-    let default_config = proxy::config::AppConfig::default();
+    // 尝试加载 TOML 配置文件
+    let app_config = match proxy::config::AppConfig::load_from_file("config.toml") {
+        Ok(config) => {
+            println!("成功加载配置文件 config.toml");
+            config
+        }
+        Err(e) => {
+            println!("无法加载配置文件 config.toml: {}", e);
+            println!("使用默认配置");
+            proxy::config::AppConfig::default()
+        }
+    };
     
-    // 调用启动函数，使用硬编码配置
-    start_quic_server(default_config).await?;
+    // 调用启动函数，使用加载的配置
+    start_quic_server(app_config).await?;
     
     Ok(())
 }
