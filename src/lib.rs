@@ -1241,7 +1241,7 @@ pub async fn start_quic_server(
     // 创建规则分发器
     let rule_dispatcher = Arc::new_cyclic(|me| {
         let mut builder = RuleDispatcherBuilder::default();
-        builder.set_resolver(Some(Arc::downgrade(&resolver) as Weak<dyn Resolver>));
+        builder.set_resolver(Some(Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>));
 
         // 创建直连动作
         let direct_action = Action {
@@ -1256,7 +1256,7 @@ pub async fn start_quic_server(
         // 创建代理动作
         let proxy_action = Action {
             tcp_next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
-            resolver: Arc::downgrade(&resolver) as Weak<dyn Resolver>,
+            resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
         };
 
         let proxy_handle = builder
@@ -1305,7 +1305,7 @@ pub async fn start_quic_server(
             // 创建分发器
             let fallback_action = Action {
                 tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
-                resolver: Arc::downgrade(&resolver) as Weak<dyn Resolver>,
+                resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
             };
 
             builder.build(rule_set, fallback_action, me.clone())
@@ -1314,7 +1314,7 @@ pub async fn start_quic_server(
             
             let fallback_action = Action {
                 tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
-                resolver: Arc::downgrade(&resolver) as Weak<dyn Resolver>,
+                resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
             };
             
             builder.build(RuleSet::default(), fallback_action, me.clone())
