@@ -735,8 +735,44 @@ pub async fn start_dispatcher_server(
     )];
     println!("Created DoH client for URL: {}", app_config.dns.doh);
 
-    // 创建代理解析器
-    let proxy_resolver: Arc<dyn Resolver> = Arc::new(HostResolver::new(vec![], doh_factories));
+    // 创建UDP DNS工厂链路 (8.8.8.8:53)
+    // 1. 创建UDP出站工厂
+    let udp_socket_outbound_factory = Arc::new(SocketOutboundFactory {
+        resolver: Arc::downgrade(&direct_resolver),
+        bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+        bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
+    });
+
+    // 2. 创建UDP重定向工厂，指向代理服务器
+    let udp_redirect_factory = Arc::new(DatagramSessionRedirectFactory {
+        remote_peer: proxy_addr.clone(),
+        next: Arc::downgrade(&udp_socket_outbound_factory) as Weak<dyn DatagramSessionFactory>,
+    });
+
+    // 3. 创建UDP SS加密工厂
+    let ss_udp_factory = Arc::new(ShadowsocksDatagramSessionFactory::<Aes128Gcm>::new(
+        key,
+        Arc::downgrade(&udp_redirect_factory) as Weak<dyn DatagramSessionFactory>,
+    ));
+
+    // 4. 创建指向8.8.8.8:53的UDP DNS工厂
+    // 使用DatagramSessionRedirectFactory指向8.8.8.8:53
+    let udp_dns_target = DestinationAddr {
+        host: HostName::Ip("8.8.8.8".parse().unwrap()),
+        port: 53,
+    };
+    
+    let udp_dns_factory = Arc::new(DatagramSessionRedirectFactory {
+        remote_peer: move || {
+            let target = udp_dns_target.clone();
+            async move { target }
+        },
+        next: Arc::downgrade(&ss_udp_factory) as Weak<dyn DatagramSessionFactory>,
+    });
+
+    // 创建代理解析器，同时支持DoH和UDP DNS
+    let udp_dns_factories = vec![Arc::downgrade(&udp_dns_factory) as Weak<dyn DatagramSessionFactory>];
+    let proxy_resolver: Arc<dyn Resolver> = Arc::new(HostResolver::new(udp_dns_factories, doh_factories));
 
     // 3. 创建直连出站工厂
     let direct_outbound_factory = Arc::new(SocketOutboundFactory {

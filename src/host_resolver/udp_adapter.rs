@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, RwLock, Weak};
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use futures::future::{BoxFuture, FutureExt};
@@ -24,6 +25,7 @@ enum SessionState {
 pub struct FlowDatagramSocket {
     session_handle: Mutex<Option<(u32, SessionState)>>,
     flushing: AtomicBool,
+    request_start_time: Mutex<Option<Instant>>,
 }
 
 #[async_trait]
@@ -36,6 +38,7 @@ impl UdpSocket for FlowDatagramSocket {
         Ok(FlowDatagramSocket {
             session_handle: Mutex::new(None),
             flushing: AtomicBool::new(false),
+            request_start_time: Mutex::new(None),
         })
     }
 
@@ -75,6 +78,15 @@ impl UdpSocket for FlowDatagramSocket {
         let (_dest, chunk) = ready!(session.as_mut().poll_recv_from(cx))
             .ok_or_else(|| io::Error::new(io::ErrorKind::ConnectionReset, "UDP recv error"))?;
         buf[..chunk.len()].copy_from_slice(&chunk);
+        
+        // 计算并打印UDP DNS响应时间
+        if let Ok(mut start_time_guard) = self.request_start_time.lock() {
+            if let Some(start_time) = start_time_guard.take() {
+                let duration = start_time.elapsed();
+                println!("🚀 UDP DNS响应时间: {}ms (工厂ID: {})", duration.as_millis(), index);
+            }
+        }
+        
         // Cheat trust_dns_resolver as if the packet comes from the remote peer
         let dest = SocketAddr::new(index.to_ne_bytes().into(), 53);
         Poll::Ready(Ok((chunk.len(), dest)))
@@ -152,6 +164,16 @@ impl UdpSocket for FlowDatagramSocket {
             self.flushing.store(false, Ordering::Relaxed);
             Poll::Ready(Ok(buf.len()))
         } else {
+            // 记录UDP DNS请求开始时间
+            let index = match target.ip() {
+                std::net::IpAddr::V4(ipv4) => u32::from_ne_bytes(ipv4.octets()),
+                std::net::IpAddr::V6(_) => 0, // IPv6暂时不支持
+            };
+            if let Ok(mut start_time_guard) = self.request_start_time.lock() {
+                *start_time_guard = Some(Instant::now());
+            }
+            println!("📤 发送UDP DNS请求到: {} (工厂ID: {}), 大小: {} bytes", target, index, buf.len());
+            
             session.as_mut().send_to(
                 DestinationAddr {
                     host: HostName::Ip(target.ip()),
@@ -175,6 +197,7 @@ impl UdpSocket for FlowDatagramSocket {
         Ok(FlowDatagramSocket {
             session_handle: Mutex::new(None),
             flushing: AtomicBool::new(false),
+            request_start_time: Mutex::new(None),
         })
     }
 

@@ -155,11 +155,14 @@ def domain_to_dns_format(domain):
     result.append(0)  # 域名结束符
     return bytes(result)
 
-def test_dns_query(domain="google.com"):
+def test_dns_query(proxy_host="127.0.0.1", proxy_port=1080, domain="google.com", dns_server="8.8.8.8"):
     """测试通过SOCKS5代理发送DNS查询
     
     Args:
+        proxy_host: SOCKS5代理地址
+        proxy_port: SOCKS5代理端口
         domain: 要查询的域名，默认为google.com
+        dns_server: DNS服务器地址
     """
     # 构建DNS查询域名部分
     domain_bytes = domain_to_dns_format(domain)
@@ -179,7 +182,7 @@ def test_dns_query(domain="google.com"):
     )
     
     print(f"[*] 查询域名: {domain}")
-    result = send_udp_via_socks5("127.0.0.1", 1085, "8.8.8.8", 53, dns_query, verbose=True)
+    result = send_udp_via_socks5(proxy_host, proxy_port, dns_server, 53, dns_query, verbose=True)
     
     if result:
         print("\n[+] DNS查询成功!")
@@ -245,13 +248,13 @@ def parse_dns_response(response):
             
             pos += data_len
 
-def test_simple_udp():
+def test_simple_udp(proxy_host="127.0.0.1", proxy_port=1080):
     """发送简单的UDP消息到echo服务器"""
     # 注意：需要有支持UDP回显的服务器
     test_data = b"Hello, UDP via SOCKS5!"
     
     # 这里可以换成实际的UDP echo服务器
-    result = send_udp_via_socks5("127.0.0.1", 1085, "127.0.0.1", 7, test_data, verbose=True)
+    result = send_udp_via_socks5(proxy_host, proxy_port, "127.0.0.1", 7, test_data, verbose=True)
     
     if result:
         print(f"\n[+] 收到回显数据: {result.decode('utf-8', errors='ignore')}")
@@ -261,8 +264,8 @@ def test_simple_udp():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='SOCKS5 UDP代理测试工具')
     parser.add_argument('--proxy-host', default='127.0.0.1', help='SOCKS5代理地址')
-    parser.add_argument('--proxy-port', type=int, default=1085, help='SOCKS5代理端口')
-    parser.add_argument('--test', choices=['dns', 'echo'], default='dns', help='要运行的测试类型')
+    parser.add_argument('--proxy-port', type=int, default=1080, help='SOCKS5代理端口')
+    parser.add_argument('--test', choices=['dns', 'echo', 'ntp', 'stun'], default='dns', help='要运行的测试类型')
     parser.add_argument('--domain', default='google.com', help='DNS查询的域名 (仅用于DNS测试)')
     parser.add_argument('--dns-server', default='8.8.8.8', help='DNS服务器地址')
     
@@ -273,7 +276,8 @@ if __name__ == "__main__":
     
     if args.test == 'dns':
         print("运行DNS查询测试...")
-        test_dns_query(domain=args.domain)
+        test_dns_query(proxy_host=args.proxy_host, proxy_port=args.proxy_port, 
+                      domain=args.domain, dns_server=args.dns_server)
     else:
         print("运行UDP echo测试...")
-        test_simple_udp() 
+        test_simple_udp(proxy_host=args.proxy_host, proxy_port=args.proxy_port) 

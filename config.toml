@@ -23,7 +23,7 @@ china_doh = "https://1.12.12.12/dns-query"
 global_doh = "https://8.8.8.8/dns-query"
 # 通用DoH服务器
 #doh = "https://rapid-paper-c846.aimerlp19.workers.dev/dns-query"
-doh = "http://127.0.0.1:5353/dns-query"
+doh = "https://1.1.1.1/dns-query"
 # 备用DoH服务器
 adg = "http://94.140.14.14/resolve"
 pub_dns = "https://doh.pub/dns-query"
@@ -36,7 +36,7 @@ ss_key = "JtivfX27TuAkUkfgFXGuEQ=="
 # 客户端配置
 [client]
 # TCP监听地址
-listen_addr_v4 = "0.0.0.0:1080"
+listen_addr_v4 = "0.0.0.0:1081"
 listen_addr_v6 = "[::]:1088"
 # UDP监听地址
 udp_listen_addr_v4 = "0.0.0.0:1080"

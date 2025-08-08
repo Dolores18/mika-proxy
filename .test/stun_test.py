@@ -43,7 +43,7 @@ try:
     print(f"SOCKS5请求数据: {socks5_request.hex()}")
     
     # 发送请求
-    proxy_address = ('127.0.0.1', 1082)
+    proxy_address = ('127.0.0.1', 1080)
     print(f"发送到代理: {proxy_address}")
     sock.sendto(socks5_request, proxy_address)
     
