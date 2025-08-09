@@ -4,6 +4,7 @@ use std::sync::{Arc, Weak};
 use async_trait::async_trait;
 use futures::future::join;
 use smallvec::SmallVec;
+use log::info;
 
 use super::*;
 
@@ -63,7 +64,7 @@ impl RuleDispatcher {
             (HostName::DomainName(domain), Some(resolver))
                 if self.rule_set.should_resolve(src, domain, dst_port) =>
             {
-                println!("🔍 域名需要解析: {}", domain);
+                println!("🍎域名需要解析: {}", domain);
                 let Some(resolver) = resolver.upgrade() else {
                     return TryMatchResult::Err(FlowError::NoOutbound);
                 };
@@ -94,13 +95,13 @@ impl RuleDispatcher {
                 let action = self.actions.get(id.0 as usize);
                 if let Some(action) = action {
                     if let Some(tcp_next) = action.tcp_next.upgrade() {
-                        println!(
+                        info!(
                             "👉 Action TCP handler: {:?}",
                             std::any::type_name_of_val(&*tcp_next)
                         );
                     }
                     if let Some(resolver) = action.resolver.upgrade() {
-                        println!(
+                        info!(
                             "👉 Action resolver: {:?}",
                             std::any::type_name_of_val(&*resolver)
                         );
@@ -110,7 +111,7 @@ impl RuleDispatcher {
             });
         match res {
             Some(Some(a)) => {
-                println!("👉 使用匹配的 Action");
+                info!("👉 使用匹配的 Action");
                 TryMatchResult::Matched(a)
             }
             Some(None) => {

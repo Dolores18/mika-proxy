@@ -772,7 +772,7 @@ pub async fn start_dispatcher_server(
 
     // 创建代理解析器，同时支持DoH和UDP DNS
     let udp_dns_factories = vec![Arc::downgrade(&udp_dns_factory) as Weak<dyn DatagramSessionFactory>];
-    let proxy_resolver: Arc<dyn Resolver> = Arc::new(HostResolver::new(udp_dns_factories, doh_factories));
+    let proxy_resolver: Arc<dyn Resolver> = Arc::new(HostResolver::new(udp_dns_factories, vec![]));
 
     // 3. 创建直连出站工厂
     let direct_outbound_factory = Arc::new(SocketOutboundFactory {

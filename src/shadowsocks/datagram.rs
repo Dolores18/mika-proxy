@@ -48,7 +48,7 @@ where
     }
 
     fn send_to(&mut self, remote_peer: DestinationAddr, buf: Buffer) {
-        println!("🍓shadowsocks send_to: {:?}", remote_peer);
+        //println!("🍓shadowsocks send_to: {:?}", remote_peer);
         let mut tx_handshake = Vec::with_capacity(259 + buf.len());
         write_dest(&mut tx_handshake, &remote_peer);
         tx_handshake.extend_from_slice(&buf);

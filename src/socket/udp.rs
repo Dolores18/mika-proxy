@@ -261,11 +261,11 @@ impl<
         match dst.host {
             HostName::Ip(IpAddr::V4(v4)) => {
                 let test_ip = Ipv4Addr::new(223,5,5,5);
-                println!("🌹udp客户端使用IPv4 发送数据包: {}", v4);
+                //println!("🌹udp客户端使用IPv4 发送数据包: {}", v4);
                 self.tx_buf = Some((ResolvingAddr::Ready((Some(v4), None, port)), buf));
             }
             HostName::Ip(IpAddr::V6(v6)) => {
-                println!("🌹udp客户端使用ipv6发送数据包:{}", v6);
+                //println!("🌹udp客户端使用ipv6发送数据包:{}", v6);
 
                 self.tx_buf = Some((ResolvingAddr::Ready((None, Some(v6), port)), buf));
             }
@@ -333,9 +333,9 @@ impl<
         // 添加打印接收到的UDP数据包内容
         if let Poll::Ready(Some((ref addr, ref buf))) = result {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-            println!("📥 UDP接收数据包: 来源={:?}, 长度={}, 时间: {}s {}ms", 
-                     addr, buf.len(), now.as_secs(), now.subsec_millis());
-            println!("  数据包内容(十六进制):");
+            //println!("📥 UDP接收数据包: 来源={:?}, 长度={}, 时间: {}s {}ms", 
+            //         addr, buf.len(), now.as_secs(), now.subsec_millis());
+            //println!("  数据包内容(十六进制):");
             for (i, chunk) in buf.chunks(16).enumerate() {
                 let hex_values: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
                 let ascii_values: String = chunk.iter()

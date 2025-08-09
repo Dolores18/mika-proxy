@@ -110,14 +110,14 @@ pub async fn dial_stream(
         "🌹tcp客户端正在连接到: {:?}:{}",
         context.remote_peer.host, context.remote_peer.port
     );
-
+    /* 
     if !initial_data.is_empty() {
-        info!(
-            "🌹tcp客户端初始数据 (前50字节): {:?}",
-            &initial_data[..50.min(initial_data.len())]
-        );
+        //info!(
+        //    "🌹tcp客户端初始数据 (前50字节): {:?}",
+        //    &initial_data[..50.min(initial_data.len())]
+        //);
     }
-
+    */
     let port = context.remote_peer.port;
     let mut tcp_stream = match (context.remote_peer.host.clone(), bind_v4, bind_v6) {
         (HostName::Ip(IpAddr::V4(ip)), Some(bind_v4), _) => {
@@ -253,10 +253,10 @@ pub async fn dial_stream(
     };
 
     if !initial_data.is_empty() {
-        println!("🌹tcp客户端初始数据长度: {},数据是{:0X?}", initial_data.len(), &initial_data[0..20.min(initial_data.len())]);
-        println!("🌹tcp客户端正在发送初始数据...");
+        //println!("🌹tcp客户端初始数据长度: {},数据是{:0X?}", initial_data.len(), &initial_data[0..20.min(initial_data.len())]);
+        //println!("🌹tcp客户端正在发送初始数据...");
         tcp_stream.write_all(initial_data).await?;
-        println!("🌹tcp客户端初始数据发送完成");
+        //println!("🌹tcp客户端初始数据发送完成");
     }
 
     Ok((Box::new(CompatFlow::new(tcp_stream, 4096)), Buffer::new()))

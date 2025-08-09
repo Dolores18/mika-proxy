@@ -172,7 +172,7 @@ impl UdpSocket for FlowDatagramSocket {
             if let Ok(mut start_time_guard) = self.request_start_time.lock() {
                 *start_time_guard = Some(Instant::now());
             }
-            println!("📤 发送UDP DNS请求到: {} (工厂ID: {}), 大小: {} bytes", target, index, buf.len());
+            //println!("📤 发送UDP DNS请求到: {} (工厂ID: {}), 大小: {} bytes", target, index, buf.len());
             
             session.as_mut().send_to(
                 DestinationAddr {

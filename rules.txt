@@ -8,7 +8,8 @@ domain-suffix,bdimg.com,direct
 domain-suffix,bdstatic.com,direct
 domain-suffix,baidubce.com,direct
 domain-suffix,bcebos.com,direct
-
+domain-suffix,baidustatic.com,direct
+domain-suffix,cnzz.com,direct
 # B站相关
 domain-suffix,bilibili.com,direct
 domain-suffix,hdslb.com,direct
@@ -26,7 +27,7 @@ domain-suffix,biligame.net,direct
 domain-suffix,im9.com,direct
 domain-suffix,smtcdns.net,direct
 domain-suffix,biliimg.com,direct
-
+domain-suffix,hdslb.com,direct
 # 其他中国网站
 domain-suffix,qq.com,direct
 domain-suffix,zhihu.com,direct
@@ -34,6 +35,8 @@ domain-suffix,zhimg.com,direct
 domain-suffix,ciyuancheng.net,direct
 domain-suffix,linux.do,proxy
 domain-suffix,anime.girigirilove.com,direct
+domain-suffix,kukuw.com,direct
+domain-suffix,freemdict.com,direct
 # 代理域名列表
 # 谷歌相关
 domain-suffix,google.com,proxy
@@ -47,7 +50,10 @@ domain-suffix,gemini.google.com,proxy
 domain-suffix,www.gstatic.com,proxy
 domain-suffix,www.doubleclick.net,proxy
 domain-suffix,beacons.gcp.gvt2.com,proxy
-
+domain-suffix,googlesyndication.com,proxy
+domain-suffix,ggpht.com,proxy
+domain-suffix,gvt3.com,proxy
+domain-suffix,ade.googlesyndication.com,proxy
 # youtube
 domain-suffix,youtube.com,proxy
 domain-suffix,youtu.be,proxy
@@ -59,10 +65,14 @@ domain-suffix,youtubei.googleapis.com,proxy
 domain-suffix,apis.google.com,proxy
 domain-suffix,googleusercontent.com,proxy
 domain-suffix,gstatic.com,proxy
-
+domain-suffix,co.jp,proxy
+domain-suffix,googleadservices.com,proxy
 # 备用DoH服务器
 domain-suffix,cloudflare-dns.com,proxy
+domain-suffix,cloudflare.com,proxy
 
+# 微软相关
+domain-suffix,github.com,proxy
 
 # telegram
 host-suffix,149.154.175.54,proxy
@@ -76,5 +86,12 @@ domain-suffix,api2.cursor.sh,proxy
 
 #AI
 domain-suffix,deepseek.com,proxy
+domain-suffix,chatgpt.com,proxy
+domain-suffix,claude.com,proxy
+domain-suffix,claude.ai,proxy
+
+# 其他
+domain-suffix,stripe.com,proxy
+
 # 最终规则 - 不匹配任何规则时使用
 final,proxy 
