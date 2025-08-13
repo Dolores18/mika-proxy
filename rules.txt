@@ -28,7 +28,20 @@ domain-suffix,im9.com,direct
 domain-suffix,smtcdns.net,direct
 domain-suffix,biliimg.com,direct
 domain-suffix,hdslb.com,direct
+domain-suffix,bilibili.cn,direct
+domain-suffix,biligame.com,direct
+domain-suffix,bilicomics.com,direct
+# 阿里相关
+domain-suffix,alicdn.com,direct
+domain-suffix,effirst.com,direct
+domain-suffix,taobao.com,direct
+
+
 # 其他中国网站
+domain-suffix,cn,direct
+domain-suffix,gov.cn,direct
+domain-suffix,gov.com,direct
+domain-suffix,www.gov.cn,direct
 domain-suffix,qq.com,direct
 domain-suffix,zhihu.com,direct
 domain-suffix,zhimg.com,direct
@@ -37,6 +50,10 @@ domain-suffix,linux.do,proxy
 domain-suffix,anime.girigirilove.com,direct
 domain-suffix,kukuw.com,direct
 domain-suffix,freemdict.com,direct
+domain-suffix,quark.cn,direct
+domain-suffix,quark.com,direct
+domain-suffix,vzuu.com,direct
+
 # 代理域名列表
 # 谷歌相关
 domain-suffix,google.com,proxy
@@ -53,7 +70,10 @@ domain-suffix,beacons.gcp.gvt2.com,proxy
 domain-suffix,googlesyndication.com,proxy
 domain-suffix,ggpht.com,proxy
 domain-suffix,gvt3.com,proxy
+domain-suffix,gvt2.com,proxy
 domain-suffix,ade.googlesyndication.com,proxy
+domain-suffix,googletagmanager.com,proxy
+
 # youtube
 domain-suffix,youtube.com,proxy
 domain-suffix,youtu.be,proxy
@@ -73,6 +93,8 @@ domain-suffix,cloudflare.com,proxy
 
 # 微软相关
 domain-suffix,github.com,proxy
+domain-suffix,githubassets.com,proxy
+domain-suffix,githubusercontent.com,proxy
 
 # telegram
 host-suffix,149.154.175.54,proxy
@@ -89,9 +111,12 @@ domain-suffix,deepseek.com,proxy
 domain-suffix,chatgpt.com,proxy
 domain-suffix,claude.com,proxy
 domain-suffix,claude.ai,proxy
-
+domain-suffix,oaistatic.com,proxy
+domain-suffix,anthropic.com,proxy
 # 其他
 domain-suffix,stripe.com,proxy
-
+domain-suffix,stripe.network,proxy
+domain-suffix,browser-intake-datadoghq.com,proxy
+domain-suffix,nexus-websocket-a.intercom.io,proxy
 # 最终规则 - 不匹配任何规则时使用
 final,proxy 

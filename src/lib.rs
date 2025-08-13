@@ -1200,7 +1200,7 @@ pub async fn start_quic_server(
     let uuid = Uuid::parse_str("d39c46e2-71c1-49aa-b9a8-419ef924ed6b").unwrap();
     let password = "4gYk7WzL9q3e".to_string();
     
-    info!("QUIC 服务器配置: {}:{}", server_addr, server_port);
+    println!("QUIC 服务器配置: {}:{}", server_addr, server_port);
     
     // 创建系统解析器
     let resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
