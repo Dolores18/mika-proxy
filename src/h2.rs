@@ -7,10 +7,10 @@ use std::str::FromStr;
 use std::sync::Weak;
 use std::task::{Context, Poll};
 
-use http::uri::{Scheme, Uri};
 use hyper::client::connect::{Connected, Connection};
 use hyper::rt::Executor;
 use hyper::service::Service as TowerService;
+use hyper::Uri;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::flow::*;
@@ -79,7 +79,7 @@ impl TowerService<Uri> for FlowAdapterConnector {
             host: next_host.clone(),
             port: dst
                 .port_u16()
-                .unwrap_or(if dst.scheme() == Some(&Scheme::HTTPS) {
+                .unwrap_or(if dst.scheme_str() == Some("https") {
                     443
                 } else {
                     80
@@ -101,7 +101,7 @@ impl TowerService<Uri> for FlowAdapterConnector {
             );
             
             // 根据协议选择应用层协议
-            let is_https = dst.scheme() == Some(&Scheme::HTTPS);
+            let is_https = dst.scheme_str() == Some("https");
             if is_https {
                 ctx.application_layer_protocol = smallvec::smallvec!["h2"];
                 println!("FlowAdapterConnector: 开始创建 TCP 连接, 使用 HTTP/2");

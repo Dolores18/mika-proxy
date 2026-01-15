@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
 use serde::{de, Deserialize, Deserializer, Serialize};
@@ -43,9 +44,9 @@ impl HostName {
     }
 }
 
-impl ToString for DestinationAddr {
-    fn to_string(&self) -> String {
-        format!("{}:{}", self.host.to_string(), self.port)
+impl fmt::Display for DestinationAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.host.to_string(), self.port)
     }
 }
 

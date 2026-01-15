@@ -4,22 +4,16 @@ use std::task::{ready, Context, Poll};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures::{FutureExt, SinkExt};
-use http::header::{ACCEPT, CONTENT_TYPE};
-use http::uri::Uri;
-use http::{Method, Request};
 use hyper::body::{Bytes, HttpBody};
 use hyper::client::ResponseFuture;
-use hyper::{Body, Client as HyperClient};
-use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
+use hyper::{Body, Client as HyperClient, Request, Uri};
+use hyper_rustls::HttpsConnector;
 use log::info;
 use tokio::sync::mpsc;
 use tokio_util::sync::PollSender;
-use crate::host_resolver::dns_packet_parser;
 use crate::flow::*;
 use crate::h2::{FlowAdapterConnector, TokioHyperExecutor};
-use rustls;
 
 pub struct DohDatagramAdapterFactory {
     client: HyperClient<HttpsConnector<FlowAdapterConnector>, Body>,
@@ -48,7 +42,7 @@ impl DohDatagramAdapterFactory {
         // 创建自定义连接器
         let flow_connector = FlowAdapterConnector { next };
 
-        let is_https = url.scheme() == Some(&http::uri::Scheme::HTTPS);
+        let is_https = url.scheme_str() == Some("https");
         println!("Creating DoH client for URL: {} (is_https: {})", url, is_https);
 
         // 使用统一的HTTPS连接器，同时支持HTTP和HTTPS
@@ -253,9 +247,9 @@ impl DatagramSession for DohDatagramAdapter {
                     println!("发送JSON API DoH请求: {}, 查询ID: {}", uri, self.current_query_id);
                     
                     let req = Request::builder()
-                        .method(Method::GET)
+                        .method("GET")
                         .uri(uri)
-                        .header(ACCEPT, "application/dns-json")
+                        .header("Accept", "application/dns-json")
                         // 不再使用extension
                         .body(Body::empty())
                         .unwrap();
@@ -268,10 +262,10 @@ impl DatagramSession for DohDatagramAdapter {
                     println!("无法解析DNS查询包以构建JSON API请求");
                     // 如果无法解析，回退到标准DoH请求
                     let req = Request::builder()
-                        .method(Method::POST)
+                        .method("POST")
                         .uri(self.url.clone())
-                        .header(CONTENT_TYPE, "application/dns-message")
-                        .header(ACCEPT, "application/dns-message")
+                        .header("Content-Type", "application/dns-message")
+                        .header("Accept", "application/dns-message")
                         .header("Content-Length", buf.len().to_string())
                         .body(buf.into())
                         .unwrap();
@@ -289,10 +283,10 @@ impl DatagramSession for DohDatagramAdapter {
             
             // 原始的二进制DoH请求方法，不变
             let req = Request::builder()
-                .method(Method::POST)
+                .method("POST")
                 .uri(self.url.clone())
-                .header(CONTENT_TYPE, "application/dns-message")
-                .header(ACCEPT, "application/dns-message")
+                .header("Content-Type", "application/dns-message")
+                .header("Accept", "application/dns-message")
                 .header("Content-Length", buf.len().to_string())
                 .body(buf.into())
                 .unwrap();

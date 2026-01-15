@@ -90,6 +90,7 @@ mod fakeip_mapback;
 pub use fakeip_mapback::{FakeIpMapBackStreamHandler, FakeIpMapBackDatagramSessionHandler};
 mod tuic;
 mod tls;
+mod hysteria2;
 use uuid::Uuid;
 use quinn::{VarInt};
 use std::time::Duration;
@@ -1372,6 +1373,194 @@ pub async fn start_quic_server(
     
     println!(
         "QUIC proxy server listening on {} (IPv4) and {} (IPv6)",
+        listen_addr_v4, listen_addr_v6
+    );
+    
+    // 创建监听器
+    let handle_v4 = listen_tcp(
+        Arc::downgrade(&socks5_handler) as Weak<dyn StreamHandler>,
+        listen_addr_v4,
+    )?;
+    
+    let handle_v6 = listen_tcp(
+        Arc::downgrade(&socks5_handler) as Weak<dyn StreamHandler>,
+        listen_addr_v6,
+    )?;
+    
+    // 等待所有监听器完成
+    tokio::try_join!(handle_v4, handle_v6)?;
+    
+    Ok(())
+}
+
+/// 启动 Hysteria2 代理服务器
+pub async fn start_hy2_server(
+    app_config: config::AppConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    info!("启动 Hysteria2 代理服务器");
+    
+    // 从配置文件读取 Hysteria2 服务器配置
+    let server_addr = "107.174.218.153".to_string(); // 需要从配置读取
+    let server_port = 8443;
+    let password = "054b6be7-cfba-4603-91f1-228231fab332".to_string(); // 需要从配置读取
+    
+    println!("Hysteria2 服务器配置: {}:{}", server_addr, server_port);
+    
+    // 创建系统解析器
+    let resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
+    
+    // 统计对象
+    let stat = forward::StatHandle::default();
+    
+    // 创建 Hysteria2 处理器选项
+    let hy2_options = hysteria2::Hy2Options {
+        name: "hy2-client".to_string(),
+        server: server_addr,
+        port: server_port,
+        password,
+        sni: Some("www.bing.com".to_string()),
+        skip_cert_verify: true,
+        alpn: vec![b"h3".to_vec()],
+        disable_mtu_discovery: false,
+    };
+    
+    // 创建 Hysteria2 处理器
+    let hy2_handler = Arc::new(hysteria2::Hy2Handler::new(hy2_options, resolver.clone()));
+    
+    // 创建 DoH 工厂时使用 Hysteria2 处理器作为代理链路
+    println!("🔍 配置文件中的DoH服务器: {}", app_config.dns.doh);
+    let doh_url = app_config.dns.doh.parse().unwrap();
+    let doh_factories = vec![DohDatagramAdapterFactory::new(
+        doh_url,
+        Arc::downgrade(&hy2_handler) as Weak<dyn StreamOutboundFactory>,
+    )];
+    println!("Created DoH client for URL: {}", app_config.dns.doh);
+
+    // 创建代理解析器
+    let proxy_resolver: Arc<dyn Resolver> = Arc::new(HostResolver::new(vec![], doh_factories));
+
+    // 创建直连出站工厂
+    let direct_outbound_factory = Arc::new(SocketOutboundFactory {
+        resolver: Arc::downgrade(&resolver),
+        bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+        bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
+    });
+ 
+    // 创建直连转发处理器
+    let direct_forward_handler = Arc::new(forward::StreamForwardHandler {
+        outbound: Arc::downgrade(&direct_outbound_factory) as Weak<dyn StreamOutboundFactory>,
+        request_timeout: 10000,
+        stat: stat.clone(),
+    });
+
+    // 创建代理转发处理器，使用 Hysteria2 处理器作为出站工厂
+    let proxy_forward_handler = Arc::new(forward::StreamForwardHandler {
+        outbound: Arc::downgrade(&hy2_handler) as Weak<dyn StreamOutboundFactory>,
+        request_timeout: 10000,
+        stat: stat.clone(),
+    });
+
+    // 创建带解析器的代理处理器
+    let proxy_with_resolver = Arc::new(StreamForwardResolver {
+        resolver: Arc::downgrade(&proxy_resolver),
+        next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
+    });
+
+    // 创建规则分发器
+    let rule_dispatcher = Arc::new_cyclic(|me| {
+        let mut builder = RuleDispatcherBuilder::default();
+        builder.set_resolver(Some(Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>));
+
+        // 创建直连动作
+        let direct_action = Action {
+            tcp_next: Arc::downgrade(&direct_forward_handler) as Weak<dyn StreamHandler>,
+            resolver: Arc::downgrade(&resolver) as Weak<dyn Resolver>,
+        };
+
+        let direct_handle = builder
+            .add_action(direct_action)
+            .expect("Failed to add direct action");
+
+        // 创建代理动作
+        let proxy_action = Action {
+            tcp_next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
+            resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
+        };
+
+        let proxy_handle = builder
+            .add_action(proxy_action)
+            .expect("Failed to add proxy action");
+            
+        // 创建一个BTreeMap来映射动作名称到ActionHandle
+        let mut action_map = std::collections::BTreeMap::new();
+        action_map.insert("direct", direct_handle);
+        action_map.insert("proxy", proxy_handle);
+        
+        // 尝试从rules.txt文件加载规则
+        let quanx_rules = load_quanx_rules_from_file("rules.txt");
+        
+        // 计算域名规则数量（不包括GeoIP规则）
+        let domain_rules_count = quanx_rules.iter()
+            .filter(|rule| !rule.starts_with("geoip"))
+            .count();
+        
+        println!("📊 域名规则总数: {}", domain_rules_count);
+        
+        // 读取GeoIP数据库
+        let geoip_db = match std::fs::read(&app_config.client.geoip_db_path) {
+            Ok(data) => {
+                println!("✅ 成功加载 GeoIP 数据库");
+                Some(Arc::from(data))
+            }
+            Err(e) => {
+                println!("⚠️ 无法加载 GeoIP 数据库: {}", e);
+                None
+            }
+        };
+        
+        // 使用quanx_filter构建完整规则集
+        if let Some(rule_set) = RuleSet::load_quanx_filter(
+            quanx_rules.iter().map(|s| s.as_str()),
+            &action_map,
+            geoip_db
+        ) {
+            println!("✅ 使用quanx_filter成功创建规则集");
+            
+            let mut rule_set = rule_set;
+            let resolving_rule_id = domain_rules_count as u32 + 1;
+            rule_set.first_resolving_rule_id = Some(resolving_rule_id);
+            
+            // 创建分发器
+            let fallback_action = Action {
+                tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
+                resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
+            };
+
+            builder.build(rule_set, fallback_action, me.clone())
+        } else {
+            println!("❌ 无法创建域名规则集");
+            
+            let fallback_action = Action {
+                tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
+                resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
+            };
+            
+            builder.build(RuleSet::default(), fallback_action, me.clone())
+        }
+    });
+    
+    // 创建 SOCKS5 处理器
+    let socks5_handler = Arc::new(Socks5Handler::new(
+        None,
+        Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>,
+    ));
+    
+    // 从配置中获取监听地址
+    let listen_addr_v4 = app_config.client.listen_addr_v4.clone();
+    let listen_addr_v6 = app_config.client.listen_addr_v6.clone();
+    
+    println!(
+        "Hysteria2 proxy server listening on {} (IPv4) and {} (IPv6)",
         listen_addr_v4, listen_addr_v6
     );
     
