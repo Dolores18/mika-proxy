@@ -4,11 +4,17 @@
 addresses = [     
            "47.79.145.69:1080" ,
      "107.174.218.153:1088"
- 
-   
-
-   
 ]
+
+# Hysteria2 配置
+[hysteria2]
+server = "107.174.218.153"
+port = 8443
+password = "054b6be7-cfba-4603-91f1-228231fab332"
+sni = "www.bing.com"
+skip_cert_verify = true
+alpn = ["h3"]
+disable_mtu_discovery = false
 
 # DNS 解析配置
 [dns]

@@ -1400,11 +1400,16 @@ pub async fn start_hy2_server(
     info!("启动 Hysteria2 代理服务器");
     
     // 从配置文件读取 Hysteria2 服务器配置
-    let server_addr = "107.174.218.153".to_string(); // 需要从配置读取
-    let server_port = 8443;
-    let password = "054b6be7-cfba-4603-91f1-228231fab332".to_string(); // 需要从配置读取
+    let hy2_config = &app_config.hysteria2;
+    let server_addr = hy2_config.server.clone();
+    let server_port = hy2_config.port;
+    let password = hy2_config.password.clone();
     
     println!("Hysteria2 服务器配置: {}:{}", server_addr, server_port);
+    println!("  - SNI: {:?}", hy2_config.sni);
+    println!("  - Skip Cert Verify: {}", hy2_config.skip_cert_verify);
+    println!("  - ALPN: {:?}", hy2_config.alpn);
+    println!("  - Disable MTU Discovery: {}", hy2_config.disable_mtu_discovery);
     
     // 创建系统解析器
     let resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
@@ -1412,16 +1417,16 @@ pub async fn start_hy2_server(
     // 统计对象
     let stat = forward::StatHandle::default();
     
-    // 创建 Hysteria2 处理器选项
+    // 创建 Hysteria2 处理器选项，使用配置文件中的值
     let hy2_options = hysteria2::Hy2Options {
         name: "hy2-client".to_string(),
         server: server_addr,
         port: server_port,
         password,
-        sni: Some("www.bing.com".to_string()),
-        skip_cert_verify: true,
-        alpn: vec![b"h3".to_vec()],
-        disable_mtu_discovery: false,
+        sni: hy2_config.sni.clone(),
+        skip_cert_verify: hy2_config.skip_cert_verify,
+        alpn: hy2_config.alpn.iter().map(|s| s.as_bytes().to_vec()).collect(),
+        disable_mtu_discovery: hy2_config.disable_mtu_discovery,
     };
     
     // 创建 Hysteria2 处理器

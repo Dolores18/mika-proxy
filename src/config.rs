@@ -21,6 +21,8 @@ pub struct AppConfig {
     pub client: ClientConfig,
     #[serde(default)]
     pub tun: TunConfig,
+    #[serde(default)]
+    pub hysteria2: Hysteria2Config,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -85,6 +87,7 @@ impl Default for AppConfig {
             domains: DomainsConfig::default(),
             client: ClientConfig::default(),
             tun: TunConfig::default(),
+            hysteria2: Hysteria2Config::default(),
         }
     }
 }
@@ -324,6 +327,36 @@ pub struct TunConfig {
     pub dns_hijack: bool,
 }
 
+// Hysteria2 配置
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Hysteria2Config {
+    pub server: String,
+    pub port: u16,
+    pub password: String,
+    #[serde(default)]
+    pub sni: Option<String>,
+    #[serde(default = "default_skip_cert_verify")]
+    pub skip_cert_verify: bool,
+    #[serde(default = "default_alpn")]
+    pub alpn: Vec<String>,
+    #[serde(default)]
+    pub disable_mtu_discovery: bool,
+}
+
+impl Default for Hysteria2Config {
+    fn default() -> Self {
+        Self {
+            server: "127.0.0.1".to_string(),
+            port: 8443,
+            password: String::new(),
+            sni: None,
+            skip_cert_verify: true,
+            alpn: vec!["h3".to_string()],
+            disable_mtu_discovery: false,
+        }
+    }
+}
+
 // 默认值函数
 fn default_tun_name() -> String {
     "utun7".to_string()
@@ -339,4 +372,12 @@ fn default_tun_netmask() -> String {
 
 fn default_tun_mtu() -> u16 {
     1500
+}
+
+fn default_skip_cert_verify() -> bool {
+    true
+}
+
+fn default_alpn() -> Vec<String> {
+    vec!["h3".to_string()]
 }
