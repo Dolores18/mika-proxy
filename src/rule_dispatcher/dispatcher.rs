@@ -64,7 +64,7 @@ impl RuleDispatcher {
             (HostName::DomainName(domain), Some(resolver))
                 if self.rule_set.should_resolve(src, domain, dst_port) =>
             {
-                println!("🍎域名需要解析: {}", domain);
+                println!("🍌域名需要解析: {}", domain);
                 let Some(resolver) = resolver.upgrade() else {
                     return TryMatchResult::Err(FlowError::NoOutbound);
                 };
