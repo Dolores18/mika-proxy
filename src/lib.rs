@@ -1427,6 +1427,7 @@ pub async fn start_hy2_server(
         skip_cert_verify: hy2_config.skip_cert_verify,
         alpn: hy2_config.alpn.iter().map(|s| s.as_bytes().to_vec()).collect(),
         disable_mtu_discovery: hy2_config.disable_mtu_discovery,
+        obfs: hy2_config.obfs.clone(),
     };
     
     // 创建 Hysteria2 处理器

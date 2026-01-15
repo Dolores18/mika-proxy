@@ -1,9 +1,11 @@
 mod codec;
 mod stream;
 mod connection;
+mod salamander;
 
 pub use stream::Hy2Stream;
 pub use connection::Hy2Connection;
+pub use salamander::Salamander;
 
 use crate::flow::{FlowContext, FlowResult, Stream, Buffer, StreamOutboundFactory, Resolver};
 use async_trait::async_trait;
@@ -27,6 +29,7 @@ pub struct Hy2Options {
     pub skip_cert_verify: bool,
     pub alpn: Vec<Vec<u8>>,
     pub disable_mtu_discovery: bool,
+    pub obfs: Option<String>, // Salamander 混淆密钥
 }
 
 pub struct Hy2Handler {
@@ -87,13 +90,31 @@ impl Hy2Handler {
         let std_socket = socket.into_std()?;
         std_socket.set_nonblocking(true)?;
 
-        let mut endpoint = QuinnEndpoint::new(
-            EndpointConfig::default(),
-            None,
-            std_socket,
-            Arc::new(TokioRuntime),
-        )?;
+        // 如果配置了混淆，使用 Salamander 包装 socket
+        let endpoint = if let Some(obfs_key) = opts.obfs {
+            println!("🔐 启用 Salamander 混淆");
+            let salamander = Arc::new(salamander::Salamander::new(
+                std_socket,
+                obfs_key.into_bytes(),
+            )?);
+            
+            QuinnEndpoint::new_with_abstract_socket(
+                EndpointConfig::default(),
+                None,
+                salamander,
+                Arc::new(TokioRuntime),
+            )?
+        } else {
+            println!("ℹ️  未启用混淆");
+            QuinnEndpoint::new(
+                EndpointConfig::default(),
+                None,
+                std_socket,
+                Arc::new(TokioRuntime),
+            )?
+        };
 
+        let mut endpoint = endpoint;
         endpoint.set_default_client_config(client_config);
         Ok(endpoint)
     }

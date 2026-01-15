@@ -341,6 +341,8 @@ pub struct Hysteria2Config {
     pub alpn: Vec<String>,
     #[serde(default)]
     pub disable_mtu_discovery: bool,
+    #[serde(default)]
+    pub obfs: Option<String>, // Salamander 混淆密钥
 }
 
 impl Default for Hysteria2Config {
@@ -353,6 +355,7 @@ impl Default for Hysteria2Config {
             skip_cert_verify: true,
             alpn: vec!["h3".to_string()],
             disable_mtu_discovery: false,
+            obfs: None,
         }
     }
 }

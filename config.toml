@@ -15,6 +15,8 @@ sni = "www.bing.com"
 skip_cert_verify = true
 alpn = ["h3"]
 disable_mtu_discovery = false
+# Salamander 混淆密钥（可选）
+obfs = "cry_me_a_r1ver"
 
 # DNS 解析配置
 [dns]

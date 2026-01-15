@@ -46,7 +46,7 @@ domain-suffix,qq.com,direct
 domain-suffix,zhihu.com,direct
 domain-suffix,zhimg.com,direct
 domain-suffix,ciyuancheng.net,direct
-domain-suffix,linux.do,direct
+domain-suffix,linux.do,proxy
 domain-suffix,anime.girigirilove.com,direct
 domain-suffix,kukuw.com,direct
 domain-suffix,freemdict.com,direct
