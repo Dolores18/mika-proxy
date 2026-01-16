@@ -37,6 +37,10 @@ domain-suffix,effirst.com,direct
 domain-suffix,taobao.com,direct
 
 
+# 谷歌中国域名 - 需要代理（放在cn规则之前避免被直连）
+domain-suffix,google.cn,proxy
+domain-suffix,www.google.cn,proxy
+
 # 其他中国网站
 domain-suffix,cn,direct
 domain-suffix,gov.cn,direct
