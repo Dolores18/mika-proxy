@@ -962,6 +962,60 @@ pub async fn start_tun1_server(
     // 创建系统解析器
     let system_resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
     
+    // 加载直连域名列表
+    let direct_domains = Arc::new(load_direct_domains(&app_config));
+    
+    // 创建DoH解析器用于直连域名的真实DNS查询
+    // 创建专门用于 DoH 的 TCP 工厂
+    let doh_tcp_factory = Arc::new(SocketOutboundFactory {
+        resolver: Arc::downgrade(&system_resolver),
+        bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+        bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
+    });
+    
+    // 创建 DoH 工厂（使用IP地址的DoH服务器，避免DNS循环依赖）
+    let doh_factories = vec![DohDatagramAdapterFactory::new(
+        "https://1.1.1.1/dns-query".parse().unwrap(), // 使用IP地址避免DNS查询
+        Arc::downgrade(&doh_tcp_factory) as Weak<dyn StreamOutboundFactory>,
+    )];
+    println!("✅ 为直连域名创建DoH客户端: https://1.1.1.1/dns-query");
+    
+    // 创建DoH解析器
+    let doh_resolver: Arc<dyn Resolver> = Arc::new(HostResolver::new(vec![], doh_factories));
+    
+    // 创建DNS缓存数据库
+    let dns_db_path = std::path::Path::new("./proxy_cache.db");
+    let dns_db = match data::Database::open(dns_db_path) {
+        Ok(db) => {
+            info!("✅ 成功打开/创建DNS缓存数据库: {:?}", dns_db_path);
+            Some(db)
+        },
+        Err(e) => {
+            error!("❌ 无法打开/创建DNS缓存数据库: {:?} - 错误: {:?}", dns_db_path, e);
+            None
+        }
+    };
+    
+    // 创建DNS服务器用于缓存
+    let dns_plugin_cache = data::PluginCache::new(data::PluginId(1), dns_db);
+    let dns_server = Arc::new(DnsServer::new(
+        100, // 并发限制
+        Arc::downgrade(&doh_resolver) as Weak<dyn Resolver>,
+        3600, // TTL秒数 (1小时)
+        dns_plugin_cache,
+    ));
+    
+    // 启动缓存定期写入任务
+    tokio::spawn(cache_writer(dns_server.clone()));
+    println!("✅ DNS服务器缓存系统已启动");
+    
+    // 创建缓存解析器
+    let caching_resolver: Arc<dyn Resolver> = Arc::new(host_resolver::CachingResolver::new(
+        dns_server.clone(),
+        doh_resolver.clone()
+    ));
+    println!("✅ DNS缓存解析器已创建，用于直连域名的真实DNS查询");
+    
     // 统计对象
     let stat = forward::StatHandle::default();
     
@@ -1145,6 +1199,8 @@ pub async fn start_tun1_server(
     // 使用配置文件中的DNS劫持设置
     tun_config = tun_config.with_dns_hijack(app_config.tun.dns_hijack);
     tun_config = tun_config.with_fakeip(fakeip.clone());
+    tun_config = tun_config.with_real_resolver(caching_resolver.clone());
+    tun_config = tun_config.with_direct_domains(direct_domains.clone());
     
     // 设置stream_handler和datagram_handler，使用带FakeIpMapBack的处理器
     tun_config = tun_config.with_stream_handler(Arc::downgrade(&tcp_with_mapback) as Weak<dyn StreamHandler>);

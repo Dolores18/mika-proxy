@@ -5,8 +5,9 @@ use log::{warn};
 use crate::flow::StreamHandler;
 use crate::flow::DatagramSessionHandler;
 use crate::fakeip::FakeIp;
+use crate::flow::Resolver;
+use std::collections::HashSet;
 
-#[derive(Debug)]
 pub struct Tunconfig {
     pub enabled: bool,
     pub tun_name: String,
@@ -18,6 +19,26 @@ pub struct Tunconfig {
     pub datagram_handler: Option<Weak<dyn DatagramSessionHandler>>,
     pub dns_hijack: bool,
     pub fakeip: Option<Arc<FakeIp>>,
+    pub real_resolver: Option<Arc<dyn Resolver>>,  // 新增：真实的 DNS 解析器
+    pub direct_domains: Option<Arc<HashSet<String>>>,  // 新增：直连域名列表
+}
+
+// 手动实现 Debug trait
+impl std::fmt::Debug for Tunconfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tunconfig")
+            .field("enabled", &self.enabled)
+            .field("tun_name", &self.tun_name)
+            .field("routes", &self.routes)
+            .field("mtu", &self.mtu)
+            .field("netmask", &self.netmask)
+            .field("gateway", &self.gateway)
+            .field("dns_hijack", &self.dns_hijack)
+            .field("fakeip", &self.fakeip.is_some())
+            .field("real_resolver", &self.real_resolver.is_some())
+            .field("direct_domains", &self.direct_domains.as_ref().map(|d| d.len()))
+            .finish()
+    }
 }
 
 impl Tunconfig {
@@ -33,6 +54,8 @@ impl Tunconfig {
             datagram_handler: None,
             dns_hijack: true,
             fakeip: None,
+            real_resolver: None,
+            direct_domains: None,
         }
     }
     
@@ -53,6 +76,16 @@ impl Tunconfig {
     
     pub fn with_fakeip(mut self, fakeip: Arc<FakeIp>) -> Self {
         self.fakeip = Some(fakeip);
+        self
+    }
+    
+    pub fn with_real_resolver(mut self, resolver: Arc<dyn Resolver>) -> Self {
+        self.real_resolver = Some(resolver);
+        self
+    }
+    
+    pub fn with_direct_domains(mut self, domains: Arc<HashSet<String>>) -> Self {
+        self.direct_domains = Some(domains);
         self
     }
 }

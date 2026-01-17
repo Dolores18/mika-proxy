@@ -14,6 +14,7 @@ use std::net::Ipv4Addr;
 use std::collections::HashMap;
 use hickory_proto::rr::RecordType;
 use hickory_proto;
+use std::collections::HashSet;
 
 // 导入FakeIp和exchange_with_resolver
 use crate::fakeip::FakeIp;
@@ -42,7 +43,14 @@ pub struct TunDatagramSession {
 }
 
 impl TunDatagramSession {
-    pub fn new(socket: UdpSocket, flow_context: Box<FlowContext>, dns_hijack: bool, resolver: Option<Arc<FakeIp>>) -> Self {
+    pub fn new(
+        socket: UdpSocket, 
+        flow_context: Box<FlowContext>, 
+        dns_hijack: bool, 
+        resolver: Option<Arc<FakeIp>>,
+        real_resolver: Option<Arc<dyn Resolver>>,
+        direct_domains: Option<Arc<HashSet<String>>>,
+    ) -> Self {
         // 分离socket读写部分
         let (mut lr, mut ls) = socket.split();
         
@@ -77,6 +85,8 @@ impl TunDatagramSession {
         let ls_dns = dup_ls.clone();
         // DNS解析器克隆
         let resolver_dns = resolver;
+        let real_resolver_dns = real_resolver;
+        let direct_domains_dns = direct_domains;
         
         // dispatcher <-> tun communications
         // l_tx: dispatcher write packet responsed from remote proxy
@@ -150,6 +160,121 @@ impl TunDatagramSession {
 
                     match hickory_proto::op::Message::from_vec(&pkt.data) {
                         Ok(msg) => {
+                            // 获取查询的域名，用于检查是否需要直连
+                            let query_domain = msg.query()
+                                .map(|q| q.name().to_ascii())
+                                .unwrap_or_else(|| "未知域名".to_string());
+                            
+                            // 辅助函数：检查域名是否在直连列表中
+                            let is_direct_domain = |domain: &str, domains: &HashSet<String>| -> bool {
+                                let domain = domain.trim_end_matches('.').to_lowercase();
+                                if domains.contains(&domain) {
+                                    return true;
+                                }
+                                // 检查子域名
+                                for d in domains {
+                                    if domain.ends_with(&format!(".{}", d)) {
+                                        return true;
+                                    }
+                                }
+                                false
+                            };
+                            
+                            // 检查是否为直连域名，如果是则使用真实 DNS 解析
+                            if let (Some(ref real_resolver), Some(ref direct_domains)) = (&real_resolver_dns, &direct_domains_dns) {
+                                if is_direct_domain(&query_domain, direct_domains) {
+                                    println!("🔓 直连域名: {}, 使用真实DNS解析", query_domain);
+                                    
+                                    // 使用真实 DNS 解析器查询
+                                    let domain_for_query = query_domain.trim_end_matches('.').to_string();
+                                    let query_type = msg.query().map(|q| q.query_type());
+                                    
+                                    // 创建 DNS 响应
+                                    let mut resp = hickory_proto::op::Message::new();
+                                    resp.set_id(msg.id());
+                                    resp.set_message_type(hickory_proto::op::MessageType::Response);
+                                    resp.add_queries(msg.queries().iter().map(|x| x.to_owned()));
+                                    resp.set_recursion_available(true);
+                                    resp.set_authoritative(false);
+                                    resp.set_recursion_desired(msg.recursion_desired());
+                                    
+                                    // 根据查询类型解析
+                                    if query_type == Some(RecordType::A) {
+                                        match real_resolver.resolve_ipv4(domain_for_query.clone()).await {
+                                            Ok(ips) if !ips.is_empty() => {
+                                                println!("✅ 真实DNS解析成功(IPv4): {} => {:?}", domain_for_query, ips);
+                                                
+                                                let records: Vec<_> = ips.iter().map(|ip| {
+                                                    let ipv4 = std::net::Ipv4Addr::from(*ip);
+                                                    hickory_proto::rr::Record::from_rdata(
+                                                        msg.query().unwrap().name().clone(),
+                                                        60, // TTL
+                                                        hickory_proto::rr::RData::A(hickory_proto::rr::rdata::A(ipv4)),
+                                                    )
+                                                }).collect();
+                                                
+                                                resp.set_response_code(hickory_proto::op::ResponseCode::NoError);
+                                                resp.add_answers(records);
+                                            }
+                                            _ => {
+                                                println!("❌ 真实DNS解析失败(IPv4): {}", domain_for_query);
+                                                resp.set_response_code(hickory_proto::op::ResponseCode::NXDomain);
+                                            }
+                                        }
+                                    } else if query_type == Some(RecordType::AAAA) {
+                                        match real_resolver.resolve_ipv6(domain_for_query.clone()).await {
+                                            Ok(ips) if !ips.is_empty() => {
+                                                println!("✅ 真实DNS解析成功(IPv6): {} => {:?}", domain_for_query, ips);
+                                                
+                                                let records: Vec<_> = ips.iter().map(|ip| {
+                                                    let ipv6 = std::net::Ipv6Addr::from(*ip);
+                                                    hickory_proto::rr::Record::from_rdata(
+                                                        msg.query().unwrap().name().clone(),
+                                                        60, // TTL
+                                                        hickory_proto::rr::RData::AAAA(hickory_proto::rr::rdata::AAAA(ipv6)),
+                                                    )
+                                                }).collect();
+                                                
+                                                resp.set_response_code(hickory_proto::op::ResponseCode::NoError);
+                                                resp.add_answers(records);
+                                            }
+                                            _ => {
+                                                println!("❌ 真实DNS解析失败(IPv6): {}", domain_for_query);
+                                                resp.set_response_code(hickory_proto::op::ResponseCode::NXDomain);
+                                            }
+                                        }
+                                    } else {
+                                        println!("⚠️ 不支持的查询类型: {:?}", query_type);
+                                        resp.set_response_code(hickory_proto::op::ResponseCode::NotImp);
+                                    }
+                                    
+                                    // 发送响应
+                                    match resp.to_vec() {
+                                        Ok(data) => {
+                                            println!("🔍 发送真实DNS响应: {}→{}, 大小: {}", 
+                                                pkt.dst_addr, pkt.src_addr, data.len());
+                                            
+                                            if let Err(e) = ls_dns
+                                                .send((
+                                                    data,
+                                                    pkt.dst_addr,
+                                                    pkt.src_addr,
+                                                ))
+                                                .await
+                                            {
+                                                warn!("failed to send dns response: {}", e);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!("failed to serialize dns response: {}", e);
+                                        }
+                                    }
+                                    
+                                    continue 'read_packet;
+                                }
+                            }
+                            
+                            println!("🔍 继续处理DNS查询(FakeIP): {}", query_domain);
                             let send_response =
                                 async |msg: hickory_proto::op::Message,
                                        pkt: &UdpPacket| {
@@ -181,13 +306,6 @@ impl TunDatagramSession {
                                         }
                                     }
                                 };
-
-                            // 获取查询的域名
-                            let query_domain = msg.query()
-                                .map(|q| q.name().to_ascii())
-                                .unwrap_or_else(|| "未知域名".to_string());
-                                
-                            println!("🔍 DNS查询域名: {}", query_domain);
                              /*
                             if msg.query().map(|q| q.query_type())
                                 == Some(RecordType::AAAA)

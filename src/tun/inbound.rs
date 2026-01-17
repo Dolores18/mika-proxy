@@ -8,10 +8,11 @@ use std::{
     sync::Arc,
     error::Error,
     result::Result,
+    collections::HashSet,
 };
 
 use crate::flow::{
-    StreamHandler, Buffer,
+    StreamHandler, Buffer, Resolver,
 };
 use crate::tun::routes::macos::Tunconfig;
 use crate::tun::routes::macos::add_route;
@@ -29,7 +30,9 @@ async fn handle_inbound_udp(
     udp_socket: netstack_smoltcp::UdpSocket,
     datagram_handler: std::sync::Arc<dyn DatagramSessionHandler>,
     dns_hijack: bool,
-    fakeip: Option<Arc<FakeIp>>, // 添加FakeIp参数
+    fakeip: Option<Arc<FakeIp>>, // FakeIp 参数
+    real_resolver: Option<Arc<dyn Resolver>>, // 新增：真实 DNS 解析器
+    direct_domains: Option<Arc<HashSet<String>>>, // 新增：直连域名列表
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
     info!("创建UDP会话处理器");
     
@@ -45,7 +48,14 @@ async fn handle_inbound_udp(
     let context_for_session = Box::new(FlowContext::new(local, remote_for_session));
     
     // 创建UDP会话，并传入上下文
-    let session = Box::new(TunDatagramSession::new(udp_socket, context_for_session, dns_hijack, fakeip));
+    let session = Box::new(TunDatagramSession::new(
+        udp_socket, 
+        context_for_session, 
+        dns_hijack, 
+        fakeip,
+        real_resolver,
+        direct_domains,
+    ));
     
     // 创建新的上下文传递给处理器
     // 这个上下文稍后会被更新，但指针保持不变
@@ -148,6 +158,12 @@ pub fn get_runner(cfg: Tunconfig) -> Result<Option<Runner>, Box<dyn StdError + S
     // 获取FakeIp实例
     let fakeip = cfg.fakeip.clone();
     
+    // 获取真实 DNS 解析器
+    let real_resolver = cfg.real_resolver.clone();
+    
+    // 获取直连域名列表
+    let direct_domains = cfg.direct_domains.clone();
+    
     Ok(Some(Box::pin(async move {
         let framed = tun.into_framed();
         let (mut tun_sink, mut tun_stream) = framed.split();
@@ -242,7 +258,9 @@ pub fn get_runner(cfg: Tunconfig) -> Result<Option<Runner>, Box<dyn StdError + S
                 udp_socket, 
                 tun_datagram_handler.expect("UDP处理程序未配置"),
                 dns_hijack,
-                fakeip // 传递FakeIp实例
+                fakeip, // 传递FakeIp实例
+                real_resolver, // 传递真实 DNS 解析器
+                direct_domains, // 传递直连域名列表
             )
                 .await
                 .map_err(|e| {
