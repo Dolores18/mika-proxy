@@ -16,6 +16,8 @@ pub struct Hy2Connection {
     conn: Arc<Connection>,
     // 保持 HTTP/3 连接活跃的 guard
     _guard: SendRequest<OpenStreams, Bytes>,
+    // 连接创建时间，用于检测超时
+    created_at: std::time::Instant,
 }
 
 impl Hy2Connection {
@@ -54,6 +56,7 @@ impl Hy2Connection {
         Ok(Arc::new(Self {
             conn: Arc::new(conn),
             _guard: guard,
+            created_at: std::time::Instant::now(),
         }))
     }
 
@@ -247,5 +250,21 @@ impl Hy2Connection {
     /// 检查连接是否已关闭
     pub fn is_closed(&self) -> bool {
         self.conn.close_reason().is_some()
+    }
+
+    /// 检查连接是否可用（类似 TUIC 的 check_open）
+    pub fn check_open(&self) -> Result<()> {
+        match self.conn.close_reason() {
+            Some(err) => {
+                tracing::warn!("🔍 [Hy2] 连接已关闭: {:?}", err);
+                Err(anyhow!("连接已关闭: {:?}", err))
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// 获取连接存活时间
+    pub fn alive_duration(&self) -> std::time::Duration {
+        self.created_at.elapsed()
     }
 }

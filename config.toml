@@ -8,8 +8,8 @@ addresses = [
 
 # Hysteria2 配置
 [hysteria2]
-server = "107.174.218.153"
-port = 8443
+server = "47.79.145.69"
+port = 8442
 password = "054b6be7-cfba-4603-91f1-228231fab332"
 sni = "www.bing.com"
 skip_cert_verify = true
