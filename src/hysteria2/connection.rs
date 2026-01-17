@@ -8,10 +8,14 @@ use quinn::{Connection, Endpoint};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::debug;
+use h3::client::SendRequest;
+use h3_quinn::OpenStreams;
 
 /// Hysteria2 连接管理
 pub struct Hy2Connection {
     conn: Arc<Connection>,
+    // 保持 HTTP/3 连接活跃的 guard
+    _guard: SendRequest<OpenStreams, Bytes>,
 }
 
 impl Hy2Connection {
@@ -44,16 +48,18 @@ impl Hy2Connection {
 
         debug!("QUIC 连接已建立，开始 HTTP/3 认证");
 
-        // 执行 Hysteria2 认证
-        Self::auth(&conn, password).await?;
+        // 执行 Hysteria2 认证，并获取 guard 保持连接活跃
+        let guard = Self::auth(&conn, password).await?;
 
         Ok(Arc::new(Self {
             conn: Arc::new(conn),
+            _guard: guard,
         }))
     }
 
     /// Hysteria2 HTTP/3 认证
-    async fn auth(conn: &Connection, password: &str) -> Result<()> {
+    /// 返回 SendRequest guard 用于保持 HTTP/3 连接活跃
+    async fn auth(conn: &Connection, password: &str) -> Result<SendRequest<OpenStreams, Bytes>> {
         println!("🔐 [Hy2 Auth] 开始 Hysteria2 认证流程");
         
         // 创建 H3 连接
@@ -148,46 +154,93 @@ impl Hy2Connection {
 
         println!("🎉 [Hy2 Auth] ========== 认证成功 ==========");
         debug!("Hysteria2 认证成功");
-        Ok(())
+        
+        // 返回 sender 作为 guard，保持 HTTP/3 连接活跃
+        Ok(sender)
     }
 
     /// 建立 TCP 连接
     pub async fn connect_tcp(&self, dest: DestinationAddr) -> Result<Hy2Stream> {
-        debug!("建立 Hysteria2 TCP 连接到: {}", dest);
+        tracing::debug!("🔗 [Hy2 TCP] 开始建立连接到: {}", dest);
 
-        let (mut tx, mut rx) = self.conn.open_bi().await?;
+        // 检查连接状态
+        if let Some(reason) = self.conn.close_reason() {
+            tracing::error!("❌ [Hy2 TCP] QUIC 连接已关闭: {:?}", reason);
+            return Err(anyhow!("QUIC 连接已关闭: {:?}", reason));
+        }
+
+        // 打开双向流，添加超时
+        let open_result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.conn.open_bi()
+        ).await;
+
+        let (mut tx, mut rx) = match open_result {
+            Ok(Ok(streams)) => {
+                tracing::debug!("✅ [Hy2 TCP] 双向流已打开");
+                streams
+            }
+            Ok(Err(e)) => {
+                tracing::error!("❌ [Hy2 TCP] 打开双向流失败: {}", e);
+                return Err(anyhow!("打开双向流失败: {}", e));
+            }
+            Err(_) => {
+                tracing::error!("❌ [Hy2 TCP] 打开双向流超时 (10秒)");
+                return Err(anyhow!("打开双向流超时"));
+            }
+        };
 
         // 发送目标地址
-        tokio_util::codec::FramedWrite::new(&mut tx, Hy2TcpCodec)
+        tracing::debug!("📤 [Hy2 TCP] 发送目标地址: {}", dest);
+        if let Err(e) = tokio_util::codec::FramedWrite::new(&mut tx, Hy2TcpCodec)
             .send(&dest)
-            .await?;
-
-        // 接收服务器响应
-        match tokio_util::codec::FramedRead::new(&mut rx, Hy2TcpCodec)
-            .next()
             .await
         {
-            Some(Ok(resp)) => {
+            tracing::error!("❌ [Hy2 TCP] 发送目标地址失败: {}", e);
+            return Err(anyhow!("发送目标地址失败: {}", e));
+        }
+
+        // 接收服务器响应，添加超时
+        tracing::debug!("📥 [Hy2 TCP] 等待服务器响应...");
+        let recv_result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio_util::codec::FramedRead::new(&mut rx, Hy2TcpCodec).next()
+        ).await;
+
+        match recv_result {
+            Ok(Some(Ok(resp))) => {
                 if resp.status != 0x00 {
+                    tracing::error!(
+                        "❌ [Hy2 TCP] 服务器拒绝连接: status={}, msg={:?}",
+                        resp.status,
+                        resp.msg
+                    );
                     return Err(anyhow!(
                         "服务器响应错误: status={}, msg={:?}",
                         resp.status,
                         resp.msg
                     ));
                 }
-                debug!(
-                    "Hysteria2 TCP 连接成功: status={}, msg={:?}",
+                tracing::debug!(
+                    "✅ [Hy2 TCP] 连接成功: status={}, msg={:?}",
                     resp.status, resp.msg
                 );
             }
-            Some(Err(e)) => {
+            Ok(Some(Err(e))) => {
+                tracing::error!("❌ [Hy2 TCP] 读取服务器响应失败: {}", e);
                 return Err(anyhow!("读取服务器响应失败: {}", e));
             }
-            None => {
+            Ok(None) => {
+                tracing::error!("❌ [Hy2 TCP] 未收到服务器响应 (连接关闭)");
                 return Err(anyhow!("未收到服务器响应"));
+            }
+            Err(_) => {
+                tracing::error!("❌ [Hy2 TCP] 等待服务器响应超时 (10秒)");
+                return Err(anyhow!("等待服务器响应超时"));
             }
         }
 
+        tracing::info!("🎉 [Hy2 TCP] Stream 建立完成: {}", dest);
         Ok(Hy2Stream::new(tx, rx))
     }
 

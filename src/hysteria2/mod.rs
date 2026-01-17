@@ -126,23 +126,34 @@ impl Hy2Handler {
             .await?;
 
         let mut guard = self.conn.lock().await;
-        if guard.is_none() {
-            *guard = Some(
-                Hy2Connection::connect(
-                    endpoint,
-                    &self.opts.server,
-                    self.opts.port,
-                    &self.opts.password,
-                    self.opts.sni.as_deref(),
-                    &*self.resolver,
-                )
-                .await?,
-            );
-        }
+        
+        // 检查现有连接是否可用
+        let need_reconnect = match guard.as_ref() {
+            Some(conn) => {
+                if conn.is_closed() {
+                    tracing::warn!(
+                        "🔄 [Hy2] 检测到连接已关闭，准备重连: {}:{}",
+                        self.opts.server,
+                        self.opts.port
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
+            None => {
+                tracing::info!(
+                    "🔌 [Hy2] 首次连接到服务器: {}:{}",
+                    self.opts.server,
+                    self.opts.port
+                );
+                true
+            }
+        };
 
-        let conn = guard.take().unwrap();
-        let conn = if conn.is_closed() {
-            Hy2Connection::connect(
+        // 如果需要重连，创建新连接
+        if need_reconnect {
+            match Hy2Connection::connect(
                 endpoint,
                 &self.opts.server,
                 self.opts.port,
@@ -150,27 +161,57 @@ impl Hy2Handler {
                 self.opts.sni.as_deref(),
                 &*self.resolver,
             )
-            .await?
-        } else {
-            conn
-        };
+            .await
+            {
+                Ok(new_conn) => {
+                    tracing::info!("✅ [Hy2] 连接成功");
+                    *guard = Some(new_conn);
+                }
+                Err(e) => {
+                    tracing::error!("❌ [Hy2] 连接失败: {}", e);
+                    *guard = None;
+                    return Err(e);
+                }
+            }
+        }
 
-        *guard = Some(conn.clone());
-        Ok(conn)
+        // 返回连接的克隆
+        Ok(guard.as_ref().unwrap().clone())
     }
 
     async fn do_connect_stream(
         &self,
         context: &mut FlowContext,
     ) -> Result<Box<dyn Stream>> {
-        let conn = self.get_conn().await?;
         let dest_addr = context.remote_peer.clone();
-        let hy2_stream = conn.connect_tcp(dest_addr).await?;
         
-        // 使用 CompatFlow 适配器
-        use crate::flow::CompatFlow;
-        let compat_stream = CompatFlow::new(hy2_stream, 8192);
-        Ok(Box::new(compat_stream))
+        // 尝试获取连接并创建 stream
+        let conn = self.get_conn().await?;
+        
+        tracing::debug!("🌐 [Hy2] 尝试连接到目标: {}", dest_addr);
+        
+        match conn.connect_tcp(dest_addr.clone()).await {
+            Ok(hy2_stream) => {
+                tracing::debug!("✅ [Hy2] Stream 创建成功: {}", dest_addr);
+                // 使用 CompatFlow 适配器
+                use crate::flow::CompatFlow;
+                let compat_stream = CompatFlow::new(hy2_stream, 8192);
+                Ok(Box::new(compat_stream))
+            }
+            Err(e) => {
+                tracing::error!("❌ [Hy2] Stream 创建失败: {} - 错误: {}", dest_addr, e);
+                
+                // 检查是否是连接级别的错误
+                if conn.is_closed() {
+                    tracing::warn!("🔄 [Hy2] 连接已断开，清除缓存的连接");
+                    // 清除已断开的连接，下次会自动重连
+                    let mut guard = self.conn.lock().await;
+                    *guard = None;
+                }
+                
+                Err(e)
+            }
+        }
     }
 
     async fn send_data(&self, stream: &mut dyn Stream, data: &[u8]) -> FlowResult<()> {
