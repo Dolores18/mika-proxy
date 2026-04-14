@@ -9,10 +9,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 初始化日志
     env_logger::init();
     
-    // 获取项目根目录
-    let project_root = std::env::current_dir()?;
-    let config_path = project_root.join("config.toml");
-    let server_txt_path = project_root.join("server.txt");
+    // 切换工作目录到项目根目录，确保后续所有的相对路径（如 rules.txt, config.toml, GeoLiteDB 等）都能正确被找到
+    let project_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Err(e) = std::env::set_current_dir(&project_root) {
+        error!("无法切换当前工作目录到 {:?}: {}", project_root, e);
+    }
+    
+    let config_path = std::path::PathBuf::from("config.toml");
+    let server_txt_path = std::path::PathBuf::from("server.txt");
     
     // 尝试加载 TOML 配置文件
     let app_config = match AppConfig::load_from_file(config_path.to_str().unwrap()) {

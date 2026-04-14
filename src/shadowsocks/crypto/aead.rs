@@ -110,7 +110,12 @@ where
     ) -> bool {
         let res = self
             .inner
-            .decrypt_in_place_detached(&self.nonce, &[], data, post_overhead.into())
+            .decrypt_in_place_detached(
+                &self.nonce,
+                &[],
+                data,
+                GenericArray::from_slice(post_overhead),
+            )
             .is_ok();
         increase_num_buf(&mut self.nonce);
         res

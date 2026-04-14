@@ -180,9 +180,8 @@ where
             // AEAD cipher
             let chunk_size = part.len() - C::POST_CHUNK_OVERHEAD;
             let (chunk, post_overhead) = part.split_at_mut(chunk_size);
-            if let Some(overhead_array) = post_overhead
-                .array_chunks::<{ C::POST_CHUNK_OVERHEAD }>()
-                .next()
+            if let Ok(overhead_array) =
+                <&[u8; C::POST_CHUNK_OVERHEAD]>::try_from(&post_overhead[..])
             {
                 if !crypto.decrypt(chunk, overhead_array) {
                     return Err(FlowError::UnexpectedData);

@@ -3,6 +3,12 @@ use proxy::config::AppConfig;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 切换工作目录到项目根目录，确保后续所有的相对路径（如 rules.txt, config.toml, GeoLiteDB 等）都能正确被找到
+    let project_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Err(e) = std::env::set_current_dir(&project_root) {
+        eprintln!("无法切换当前工作目录到 {:?}: {}", project_root, e);
+    }
+
     // 尝试加载 TOML 配置文件
     let app_config = match AppConfig::load_from_file("config.toml") {
         Ok(config) => {

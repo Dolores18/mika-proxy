@@ -1,5 +1,5 @@
 use cfb_mode::{BufDecryptor, BufEncryptor};
-use cipher::{generic_array::ArrayLength, BlockCipher, BlockEncrypt, BlockSizeUser};
+use cipher::{BlockCipher, BlockEncrypt, BlockSizeUser, generic_array::ArrayLength};
 
 use super::*;
 
@@ -28,9 +28,9 @@ where
 
     fn encrypt(
         &mut self,
-        _pre_overhead: &mut [u8; 0],
+        _pre_overhead: &mut [u8; Self::PRE_CHUNK_OVERHEAD],
         data: &mut [u8],
-        _post_overhead: &mut [u8; 0],
+        _post_overhead: &mut [u8; Self::POST_CHUNK_OVERHEAD],
     ) {
         self.enc.encrypt(data);
     }
@@ -42,18 +42,11 @@ where
         self.enc.encrypt(data);
     }
 
-    fn decrypt_size(
-        &mut self,
-        _pre_overhead: &mut [u8; Self::PRE_CHUNK_OVERHEAD],
-    ) -> Option<NonZeroUsize> {
+    fn decrypt_size(&mut self, _pre_overhead: &mut [u8; Self::PRE_CHUNK_OVERHEAD]) -> Option<NonZeroUsize> {
         None
     }
 
-    fn decrypt(
-        &mut self,
-        data: &mut [u8],
-        _post_overhead: &[u8; Self::POST_CHUNK_OVERHEAD],
-    ) -> bool {
+    fn decrypt(&mut self, data: &mut [u8], _post_overhead: &[u8; Self::POST_CHUNK_OVERHEAD]) -> bool {
         self.dec.decrypt(data);
         true
     }

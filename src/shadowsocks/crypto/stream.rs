@@ -26,9 +26,9 @@ where
 
     fn encrypt(
         &mut self,
-        _pre_overhead: &mut [u8; 0],
+        _pre_overhead: &mut [u8; Self::PRE_CHUNK_OVERHEAD],
         data: &mut [u8],
-        _post_overhead: &mut [u8; 0],
+        _post_overhead: &mut [u8; Self::POST_CHUNK_OVERHEAD],
     ) {
         self.inner.apply_keystream(data);
     }
@@ -40,11 +40,11 @@ where
         self.inner.apply_keystream(data);
     }
 
-    fn decrypt_size(&mut self, _pre_overhead: &mut [u8; 0]) -> Option<NonZeroUsize> {
+    fn decrypt_size(&mut self, _pre_overhead: &mut [u8; Self::PRE_CHUNK_OVERHEAD]) -> Option<NonZeroUsize> {
         None
     }
 
-    fn decrypt(&mut self, data: &mut [u8], _post_overhead: &[u8; 0]) -> bool {
+    fn decrypt(&mut self, data: &mut [u8], _post_overhead: &[u8; Self::POST_CHUNK_OVERHEAD]) -> bool {
         self.inner.apply_keystream(data);
         true
     }

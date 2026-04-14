@@ -1,9 +1,5 @@
-
 #![feature(generic_const_exprs)]
 #![feature(stmt_expr_attributes)]
-#![feature(array_chunks)]
-#![feature(result_flattening)]
-#![feature(let_chains)]
 use async_trait::async_trait;
 use http::Uri;
 use smallvec::SmallVec;
@@ -14,10 +10,10 @@ use std::sync::{Arc, Weak};
 mod flow;
 use flow::*;
 mod shadowsocks;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use shadowsocks::crypto::*;
-use shadowsocks::factory::stream::*;
 use shadowsocks::factory::datagram::*;
+use shadowsocks::factory::stream::*;
 mod socks5;
 use socks5::*;
 mod system_resolver;
@@ -25,7 +21,9 @@ use log::{error, info, trace};
 use std::panic;
 use system_resolver::*;
 mod redirect;
-use redirect::{StreamRedirectHandler, StreamRedirectOutboundFactory, DatagramSessionRedirectFactory};
+use redirect::{
+    DatagramSessionRedirectFactory, StreamRedirectHandler, StreamRedirectOutboundFactory,
+};
 
 use std::collections::HashSet;
 pub mod fallback;
@@ -53,7 +51,7 @@ use socks5_associate::Socks5UdpAssociateHandler;
 
 // 添加 dns_server 模块
 mod dns_server;
-use dns_server::{DnsServer, MapBackStreamHandler, MapBackDatagramSessionHandler, cache_writer};
+use dns_server::{DnsServer, MapBackDatagramSessionHandler, MapBackStreamHandler, cache_writer};
 
 // 添加 datagram 相关的导入
 use crate::flow::datagram::*;
@@ -62,8 +60,8 @@ mod host_resolver;
 use crate::host_resolver::doh_adapter::DohDatagramAdapterFactory;
 use host_resolver::HostResolver;
 mod http_proxy;
-use http_proxy::HttpProxyOutboundFactory;
 use http_proxy::HttpHandler;
+use http_proxy::HttpProxyOutboundFactory;
 // 从 forward 模块导入 DatagramHandler
 
 mod rule_dispatcher;
@@ -87,13 +85,13 @@ use dual_stack_factory::DualStackOutboundFactory;
 
 // 添加fakeip_mapback模块
 mod fakeip_mapback;
-pub use fakeip_mapback::{FakeIpMapBackStreamHandler, FakeIpMapBackDatagramSessionHandler};
-mod tuic;
-mod tls;
+pub use fakeip_mapback::{FakeIpMapBackDatagramSessionHandler, FakeIpMapBackStreamHandler};
 mod hysteria2;
-use uuid::Uuid;
-use quinn::{VarInt};
+mod tls;
+mod tuic;
+use quinn::VarInt;
 use std::time::Duration;
+use uuid::Uuid;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerStatus {
     pub server_address: String,
@@ -186,16 +184,18 @@ fn load_direct_domains(app_config: &config::AppConfig) -> HashSet<String> {
     // 首先尝试从 AppConfig 中读取域名
     if !app_config.domains.direct.is_empty() {
         println!("从配置文件加载直连域名列表");
-        let domains: HashSet<String> = app_config.domains.direct
+        let domains: HashSet<String> = app_config
+            .domains
+            .direct
             .iter()
             .map(|s| s.to_lowercase())
             .collect();
-        
+
         println!("成功加载直连域名列表，共 {} 个域名", domains.len());
         println!("直连域名列表: {:?}", domains);
         return domains;
     }
-    
+
     // 如果配置文件中没有域名列表，则尝试从文件加载
     let current_dir = std::env::current_dir().unwrap_or_default();
     info!("当前执行目录: {:?}", current_dir);
@@ -233,7 +233,7 @@ fn load_direct_domains(app_config: &config::AppConfig) -> HashSet<String> {
 // 从文件加载quanx规则
 fn load_quanx_rules_from_file(file_path: &str) -> Vec<String> {
     println!("从文件加载quanx规则: {}", file_path);
-    
+
     match std::fs::read_to_string(file_path) {
         Ok(content) => {
             let rules: Vec<String> = content
@@ -242,9 +242,9 @@ fn load_quanx_rules_from_file(file_path: &str) -> Vec<String> {
                 .filter(|line| !line.starts_with('#'))
                 .map(|line| line.trim().to_string())
                 .collect();
-                
+
             println!("成功从文件加载quanx规则，共 {} 条规则", rules.len());
-            
+
             // 打印前几条规则作为示例
             let sample_count = std::cmp::min(5, rules.len());
             if sample_count > 0 {
@@ -252,16 +252,18 @@ fn load_quanx_rules_from_file(file_path: &str) -> Vec<String> {
                 for (idx, rule) in rules.iter().take(sample_count).enumerate() {
                     println!("   [{}] {}", idx + 1, rule);
                 }
-                
+
                 if rules.len() > sample_count {
                     println!("   ... 还有 {} 条规则", rules.len() - sample_count);
                 }
             }
-            
+
             rules
         }
         Err(e) => {
-            println!("⚠️ 无法读取规则文件 {}: {}", file_path, e);
+            let current_dir = std::env::current_dir().unwrap_or_default();
+            error!("⚠️ 无法读取规则文件 {}: {}", file_path, e);
+            error!("尝试加载的绝对路径为: {:?}", current_dir.join(file_path));
             Vec::new()
         }
     }
@@ -330,7 +332,7 @@ pub async fn start_proxy_server(
     info!("启动代理服务器");
     info!("地址列表: {:?}", server_addrs);
     info!("服务器配置: {:?}", server_config);
-      // 修改代理地址创建方式
+    // 修改代理地址创建方式
     let server_config_clone = Arc::new(server_config.clone());
     let proxy_addr = server_config_clone.create_fixed_adrr();
 
@@ -394,13 +396,16 @@ pub async fn start_proxy_server(
         Ok(db) => {
             info!("✅ 成功打开/创建DNS缓存数据库: {:?}", dns_db_path);
             Some(db)
-        },
+        }
         Err(e) => {
-            error!("❌ 无法打开/创建DNS缓存数据库: {:?} - 错误: {:?}", dns_db_path, e);
+            error!(
+                "❌ 无法打开/创建DNS缓存数据库: {:?} - 错误: {:?}",
+                dns_db_path, e
+            );
             None
         }
     };
-    
+
     // 使用新创建的数据库连接
     let dns_plugin_cache = data::PluginCache::new(data::PluginId(1), dns_db);
     let dns_server = Arc::new(DnsServer::new(
@@ -409,15 +414,15 @@ pub async fn start_proxy_server(
         3600, // TTL秒数 (1小时)
         dns_plugin_cache,
     ));
-    
+
     // 启动缓存定期写入任务
     tokio::spawn(cache_writer(dns_server.clone()));
     println!("✅ DNS服务器缓存系统已启动，解析结果将持久化保存到数据库");
-    
+
     // 创建缓存解析器，先查询缓存，未命中再使用DoH
     let caching_resolver: Arc<dyn Resolver> = Arc::new(host_resolver::CachingResolver::new(
         dns_server.clone(),
-        proxy_resolver.clone()
+        proxy_resolver.clone(),
     ));
     println!("✅ DNS缓存解析器已创建");
 
@@ -427,7 +432,7 @@ pub async fn start_proxy_server(
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
- 
+
     // 4. 创建直连转发处理器
     let direct_forward_handler = Arc::new(forward::StreamForwardHandler {
         outbound: Arc::downgrade(&direct_outbound_factory) as Weak<dyn StreamOutboundFactory>,
@@ -435,9 +440,7 @@ pub async fn start_proxy_server(
         stat: stat.clone(),
     });
 
-
     // 5. 创建代理处理器链
-
 
     let redirect_factory = Arc::new(StreamRedirectOutboundFactory {
         remote_peer: proxy_addr,
@@ -459,7 +462,6 @@ pub async fn start_proxy_server(
         request_timeout: 10000,
         stat: stat.clone(),
     });
-
 
     // 6. 创建规则分发器
     let rule_dispatcher = Arc::new_cyclic(|me| {
@@ -548,7 +550,7 @@ pub async fn start_proxy_server(
     // 添加MapBackStreamHandler将IP地址映射回域名
     let mapback_handler = Arc::new(MapBackStreamHandler::new(
         &dns_server,
-        Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>
+        Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>,
     ));
 
     //创建doh响应结果映射回去
@@ -556,7 +558,7 @@ pub async fn start_proxy_server(
         resolver: Arc::downgrade(&caching_resolver),
         next: Arc::downgrade(&mapback_handler) as Weak<dyn StreamHandler>,
     });
-    
+
     // 7. 创建 SOCKS5 处理器并启动服务器
     let socks5_handler = Arc::new(Socks5Handler::new(
         None,
@@ -602,11 +604,11 @@ pub async fn start_udp_server(
 
     // 统计对象
     let stat = forward::StatHandle::default();
-    
+
     // 获取代理地址
     let server_config_clone = Arc::new(server_config.clone());
     let proxy_addr = server_config_clone.create_fixed_adrr();
-    
+
     // 获取Shadowsocks密钥
     let psd = &app_config.features.ss_key;
     let key = BASE64.decode(psd).expect("Failed to decode");
@@ -630,7 +632,6 @@ pub async fn start_udp_server(
         key,
         Arc::downgrade(&udp_redirect_factory) as Weak<dyn DatagramSessionFactory>,
     ));
-
 
     // 创建 UDP 转发处理器
     let datagram_handler = Arc::new(forward::DatagramForwardHandler {
@@ -659,7 +660,7 @@ pub async fn start_udp_server(
         Arc::downgrade(&socks5_udp_handler) as Weak<dyn DatagramSessionHandler>,
         udp_listen_addr_v4.clone(),
     )?;
-    
+
     let udp_handle_v6 = listen_udp(
         Arc::downgrade(&socks5_udp_handler) as Weak<dyn DatagramSessionHandler>,
         udp_listen_addr_v6.clone(),
@@ -678,7 +679,7 @@ pub async fn start_udp_server(
         Arc::downgrade(&socks5_associate_handler) as Weak<dyn StreamHandler>,
         udp_listen_addr_v4.clone(),
     )?;
-    
+
     let tcp_handle_v6 = listen_tcp(
         Arc::downgrade(&socks5_associate_handler) as Weak<dyn StreamHandler>,
         udp_listen_addr_v6.clone(),
@@ -704,7 +705,7 @@ pub async fn start_dispatcher_server(
     // 创建 Shadowsocks 工厂，使用配置中的密钥
     let psd = &app_config.features.ss_key;
     let key = BASE64.decode(psd).expect("Failed to decode");
-    let key: [u8; 16] = key.try_into().expect("Invalid key length"); 
+    let key: [u8; 16] = key.try_into().expect("Invalid key length");
 
     // 创建统计对象
     let stat = forward::StatHandle::default();
@@ -718,7 +719,7 @@ pub async fn start_dispatcher_server(
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
-    // 
+    //
     //创建doh重定向工厂
     let doh_redirect_factory = Arc::new(StreamRedirectOutboundFactory {
         remote_peer: proxy_addr.clone(),
@@ -726,8 +727,8 @@ pub async fn start_dispatcher_server(
     });
     //创建doh ss加密工厂
     let doh_ss_factory = Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
-    key,
-    Arc::downgrade(&doh_redirect_factory) as Weak<dyn StreamOutboundFactory>,
+        key,
+        Arc::downgrade(&doh_redirect_factory) as Weak<dyn StreamOutboundFactory>,
     ));
 
     let doh_factories = vec![DohDatagramAdapterFactory::new(
@@ -762,7 +763,7 @@ pub async fn start_dispatcher_server(
         host: HostName::Ip("8.8.8.8".parse().unwrap()),
         port: 53,
     };
-    
+
     let udp_dns_factory = Arc::new(DatagramSessionRedirectFactory {
         remote_peer: move || {
             let target = udp_dns_target.clone();
@@ -772,7 +773,8 @@ pub async fn start_dispatcher_server(
     });
 
     // 创建代理解析器，同时支持DoH和UDP DNS
-    let udp_dns_factories = vec![Arc::downgrade(&udp_dns_factory) as Weak<dyn DatagramSessionFactory>];
+    let udp_dns_factories =
+        vec![Arc::downgrade(&udp_dns_factory) as Weak<dyn DatagramSessionFactory>];
     let proxy_resolver: Arc<dyn Resolver> = Arc::new(HostResolver::new(udp_dns_factories, vec![]));
 
     // 3. 创建直连出站工厂
@@ -781,7 +783,7 @@ pub async fn start_dispatcher_server(
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
- 
+
     // 4. 创建直连转发处理器
     let direct_forward_handler = Arc::new(forward::StreamForwardHandler {
         outbound: Arc::downgrade(&direct_outbound_factory) as Weak<dyn StreamOutboundFactory>,
@@ -789,9 +791,7 @@ pub async fn start_dispatcher_server(
         stat: stat.clone(),
     });
 
-
     // 5. 创建代理处理器链
-
 
     let redirect_factory = Arc::new(StreamRedirectOutboundFactory {
         remote_peer: proxy_addr,
@@ -820,7 +820,7 @@ pub async fn start_dispatcher_server(
         next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
     });
 
-   // 6. 创建规则分发器
+    // 6. 创建规则分发器
     let rule_dispatcher = Arc::new_cyclic(|me| {
         let mut builder = RuleDispatcherBuilder::default();
         builder.set_resolver(Some(Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>));
@@ -846,22 +846,23 @@ pub async fn start_dispatcher_server(
         let proxy_handle = builder
             .add_action(proxy_action)
             .expect("Failed to add proxy action");
-            
+
         // 创建一个BTreeMap来映射动作名称到ActionHandle
         let mut action_map = std::collections::BTreeMap::new();
         action_map.insert("direct", direct_handle);
         action_map.insert("proxy", proxy_handle);
-        
+
         // 尝试从rules.txt文件加载规则
         let quanx_rules = load_quanx_rules_from_file("rules.txt");
-        
+
         // 计算域名规则数量（不包括GeoIP规则）
-        let domain_rules_count = quanx_rules.iter()
+        let domain_rules_count = quanx_rules
+            .iter()
             .filter(|rule| !rule.starts_with("geoip"))
             .count();
-        
+
         println!("📊 域名规则总数: {}", domain_rules_count);
-        
+
         // 读取GeoIP数据库
         let geoip_db = match std::fs::read(&app_config.client.geoip_db_path) {
             Ok(data) => {
@@ -873,19 +874,19 @@ pub async fn start_dispatcher_server(
                 None
             }
         };
-        
+
         // 使用quanx_filter构建完整规则集
         if let Some(rule_set) = RuleSet::load_quanx_filter(
             quanx_rules.iter().map(|s| s.as_str()),
             &action_map,
-            geoip_db
+            geoip_db,
         ) {
             println!("✅ 使用quanx_filter成功创建规则集");
-            
+
             let mut rule_set = rule_set;
             let resolving_rule_id = domain_rules_count as u32 + 1;
             rule_set.first_resolving_rule_id = Some(resolving_rule_id);
-            
+
             // 创建分发器
             let fallback_action = Action {
                 tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
@@ -895,12 +896,12 @@ pub async fn start_dispatcher_server(
             builder.build(rule_set, fallback_action, me.clone())
         } else {
             println!("❌ 无法创建域名规则集");
-            
+
             let fallback_action = Action {
                 tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
                 resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
             };
-            
+
             builder.build(RuleSet::default(), fallback_action, me.clone())
         }
     });
@@ -912,13 +913,13 @@ pub async fn start_dispatcher_server(
         None,
         Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>,
     ));
-    
+
     // 移除原来的解析器组合
     // let stream_forward_resolver = Arc::new(StreamForwardResolver {
     //     resolver: Arc::downgrade(&proxy_resolver),
     //     next: Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>,
     // });
-    
+
     // let socks5_handler = Arc::new(Socks5Handler::new(
     //     None,
     //     Arc::downgrade(&stream_forward_resolver) as Weak<dyn StreamHandler>,
@@ -958,13 +959,13 @@ pub async fn start_tun1_server(
     _runtime_handle: &tokio::runtime::Handle,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("开始初始化 TUN 服务器");
-    
+
     // 创建系统解析器
     let system_resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
-    
+
     // 加载直连域名列表
     let direct_domains = Arc::new(load_direct_domains(&app_config));
-    
+
     // 创建DoH解析器用于直连域名的真实DNS查询
     // 创建专门用于 DoH 的 TCP 工厂
     let doh_tcp_factory = Arc::new(SocketOutboundFactory {
@@ -972,30 +973,33 @@ pub async fn start_tun1_server(
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
-    
+
     // 创建 DoH 工厂（使用IP地址的DoH服务器，避免DNS循环依赖）
     let doh_factories = vec![DohDatagramAdapterFactory::new(
         "https://1.1.1.1/dns-query".parse().unwrap(), // 使用IP地址避免DNS查询
         Arc::downgrade(&doh_tcp_factory) as Weak<dyn StreamOutboundFactory>,
     )];
     println!("✅ 为直连域名创建DoH客户端: https://1.1.1.1/dns-query");
-    
+
     // 创建DoH解析器
     let doh_resolver: Arc<dyn Resolver> = Arc::new(HostResolver::new(vec![], doh_factories));
-    
+
     // 创建DNS缓存数据库
     let dns_db_path = std::path::Path::new("./proxy_cache.db");
     let dns_db = match data::Database::open(dns_db_path) {
         Ok(db) => {
             info!("✅ 成功打开/创建DNS缓存数据库: {:?}", dns_db_path);
             Some(db)
-        },
+        }
         Err(e) => {
-            error!("❌ 无法打开/创建DNS缓存数据库: {:?} - 错误: {:?}", dns_db_path, e);
+            error!(
+                "❌ 无法打开/创建DNS缓存数据库: {:?} - 错误: {:?}",
+                dns_db_path, e
+            );
             None
         }
     };
-    
+
     // 创建DNS服务器用于缓存
     let dns_plugin_cache = data::PluginCache::new(data::PluginId(1), dns_db);
     let dns_server = Arc::new(DnsServer::new(
@@ -1004,29 +1008,29 @@ pub async fn start_tun1_server(
         3600, // TTL秒数 (1小时)
         dns_plugin_cache,
     ));
-    
+
     // 启动缓存定期写入任务
     tokio::spawn(cache_writer(dns_server.clone()));
     println!("✅ DNS服务器缓存系统已启动");
-    
+
     // 创建缓存解析器
     let caching_resolver: Arc<dyn Resolver> = Arc::new(host_resolver::CachingResolver::new(
         dns_server.clone(),
-        doh_resolver.clone()
+        doh_resolver.clone(),
     ));
     println!("✅ DNS缓存解析器已创建，用于直连域名的真实DNS查询");
-    
+
     // 统计对象
     let stat = forward::StatHandle::default();
-    
+
     // 修改代理地址创建方式
     let server_config_clone = Arc::new(server_config.clone());
     let proxy_addr = server_config_clone.create_fixed_adrr();
-    
+
     // 尝试获取IPv6代理地址，使用await而不是block_on
     let ipv6_factory_creator = server_config_clone.create_fixed_ipv6_adrr();
     let ipv6_dest_addr = ipv6_factory_creator().await;
-    
+
     println!("代理地址信息:");
     println!("- IPv4代理: 已配置");
     if let Some(addr) = &ipv6_dest_addr {
@@ -1038,8 +1042,8 @@ pub async fn start_tun1_server(
     // 创建 Shadowsocks 工厂，使用配置中的密钥
     let psd = &app_config.features.ss_key;
     let key = BASE64.decode(psd).expect("Failed to decode");
-    let key: [u8; 16] = key.try_into().expect("Invalid key length");   
-    
+    let key: [u8; 16] = key.try_into().expect("Invalid key length");
+
     // 创建socket出站工厂
     let socket_outbound_factory = Arc::new(SocketOutboundFactory {
         resolver: Arc::downgrade(&system_resolver),
@@ -1052,13 +1056,13 @@ pub async fn start_tun1_server(
         remote_peer: proxy_addr.clone(),
         next: Arc::downgrade(&socket_outbound_factory) as Weak<dyn StreamOutboundFactory>,
     });
-    
+
     // 创建IPv4 SS工厂
     let ss_ipv4_factory = Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
         key.clone(),
         Arc::downgrade(&ipv4_redirect_factory) as Weak<dyn StreamOutboundFactory>,
     ));
-    
+
     // 创建IPv6 SS工厂（如果有可用的IPv6地址）
     let ss_ipv6_factory = if let Some(ipv6_addr) = ipv6_dest_addr {
         // 创建一个内部函数，每次返回相同的地址
@@ -1067,28 +1071,30 @@ pub async fn start_tun1_server(
             let addr = ipv6_addr_clone.clone();
             Box::pin(async move { addr })
         };
-        
+
         // 创建IPv6重定向工厂
         let ipv6_redirect_factory = Arc::new(StreamRedirectOutboundFactory {
             remote_peer: ipv6_fn,
             next: Arc::downgrade(&socket_outbound_factory) as Weak<dyn StreamOutboundFactory>,
         });
-        
+
         // 创建IPv6 SS工厂
-        Some(Arc::new(ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
-            key,
-            Arc::downgrade(&ipv6_redirect_factory) as Weak<dyn StreamOutboundFactory>,
-        )))
+        Some(Arc::new(
+            ShadowsocksStreamOutboundFactory::<Aes128Gcm>::new(
+                key,
+                Arc::downgrade(&ipv6_redirect_factory) as Weak<dyn StreamOutboundFactory>,
+            ),
+        ))
     } else {
         None
     };
-    
+
     // 创建双栈地址选择器工厂
     let dual_stack_factory = Arc::new(DualStackOutboundFactory::new(
         ss_ipv4_factory,
-        ss_ipv6_factory
+        ss_ipv6_factory,
     ));
-    
+
     // 创建 StreamForwardHandler 实例
     let tcp_handler = Arc::new(forward::StreamForwardHandler {
         outbound: Arc::downgrade(&dual_stack_factory) as Weak<dyn StreamOutboundFactory>,
@@ -1122,53 +1128,55 @@ pub async fn start_tun1_server(
     });
 
     let tun_handler = Arc::new(TunDatagramHandler::new(
-        Arc::downgrade(&datagram_handler) as Weak<dyn DatagramSessionHandler>,
+        Arc::downgrade(&datagram_handler) as Weak<dyn DatagramSessionHandler>
     ));
 
     // 创建FakeIP实例
     // 创建数据库连接
     let db_path = std::path::Path::new("./proxy_cache.db");
-    
+
     // 尝试打开或创建数据库
     let db = match data::Database::open(db_path) {
         Ok(db) => {
             info!("✅ 成功打开/创建数据库: {:?}", db_path);
             Some(db)
-        },
+        }
         Err(e) => {
             error!("❌ 无法打开/创建数据库: {:?} - 错误: {:?}", db_path, e);
             None
         }
     };
-    
+
     // 创建FakeIP的plugin_cache，传入数据库连接
     let plugin_cache = data::PluginCache::new(data::PluginId(2), db);
     let fakeip = Arc::new(FakeIp::new(
         [198, 18], // 使用198.18.0.0/16作为FakeIP范围
-        [0xfc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],  // 使用fc00::/18作为IPv6前缀
-        plugin_cache
+        [
+            0xfc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ], // 使用fc00::/18作为IPv6前缀
+        plugin_cache,
     ));
-    
+
     // 添加日志
     info!("✅ FakeIP服务已初始化，域名映射将持久化保存到数据库");
-    
+
     // 启动FakeIP缓存写入任务
     let cache_task = tokio::spawn(fakeip::cache_writer(fakeip.clone()));
 
     // 创建TCP和UDP调用链 - 使用FakeIpMapBack处理器替代原来的DnsServer和MapBack
-    
+
     // 为TCP创建FakeIpMapBackStreamHandler
     let tcp_with_mapback = Arc::new(FakeIpMapBackStreamHandler::new(
         fakeip.clone(),
-        Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>
+        Arc::downgrade(&tcp_handler) as Weak<dyn StreamHandler>,
     ));
-    
+
     // 为UDP创建FakeIpMapBackDatagramSessionHandler
     let udp_with_mapback = Arc::new(FakeIpMapBackDatagramSessionHandler::new(
-        fakeip.clone(), 
-        Arc::downgrade(&tun_handler) as Weak<dyn DatagramSessionHandler>
+        fakeip.clone(),
+        Arc::downgrade(&tun_handler) as Weak<dyn DatagramSessionHandler>,
     ));
-    
+
     // 创建TUN配置
     let gateway_str = tun_ip.to_string();
     let netmask_str = tun_netmask.to_string();
@@ -1183,16 +1191,16 @@ pub async fn start_tun1_server(
     };
 
     info!("TUN设备已创建，路由配置: {:?}", routes);
-    
+
     // 创建TUN配置对象
     let mut tun_config = crate::tun::routes::macos::Tunconfig::new(
-        tun_name.to_string(), 
+        tun_name.to_string(),
         routes,
         mtu,
         Some(netmask_str),
-        gateway_str
+        gateway_str,
     );
-    
+
     // 设置启用TUN，使用配置文件中的设置
     tun_config.enabled = app_config.tun.enabled;
 
@@ -1201,19 +1209,22 @@ pub async fn start_tun1_server(
     tun_config = tun_config.with_fakeip(fakeip.clone());
     tun_config = tun_config.with_real_resolver(caching_resolver.clone());
     tun_config = tun_config.with_direct_domains(direct_domains.clone());
-    
+
     // 设置stream_handler和datagram_handler，使用带FakeIpMapBack的处理器
-    tun_config = tun_config.with_stream_handler(Arc::downgrade(&tcp_with_mapback) as Weak<dyn StreamHandler>);
-    tun_config = tun_config.with_datagram_handler(Arc::downgrade(&udp_with_mapback) as Weak<dyn DatagramSessionHandler>);
-    
+    tun_config = tun_config
+        .with_stream_handler(Arc::downgrade(&tcp_with_mapback) as Weak<dyn StreamHandler>);
+    tun_config = tun_config.with_datagram_handler(
+        Arc::downgrade(&udp_with_mapback) as Weak<dyn DatagramSessionHandler>
+    );
+
     info!("TUN配置已创建: {:?}", tun_config);
-    
+
     // 获取TUN运行器
     match crate::tun::inbound::get_runner(tun_config) {
         Ok(Some(runner)) => {
             info!("TUN服务器已启动");
             println!("TUN服务器正在运行 - 按Ctrl+C退出");
-            
+
             // 运行TUN服务并等待中断信号
             tokio::select! {
                 result = runner => {
@@ -1225,21 +1236,21 @@ pub async fn start_tun1_server(
                     println!("收到中断信号，正在关闭TUN服务器...");
                 }
             }
-            
+
             // 等待缓存写入任务结束
             if !cache_task.is_finished() {
                 println!("正在等待缓存写入任务完成...");
                 // 尝试取消任务而不是等待它
                 cache_task.abort();
             }
-            
+
             info!("TUN服务器已关闭");
             Ok(())
-        },
+        }
         Ok(None) => {
             error!("TUN服务器未启用");
             Err("TUN服务器未启用".into())
-        },
+        }
         Err(e) => {
             error!("TUN服务器启动失败: {}", e);
             Err(e)
@@ -1250,21 +1261,21 @@ pub async fn start_quic_server(
     app_config: config::AppConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("启动 QUIC 代理服务器");
-    
+
     // 硬编码服务器配置
     let server_addr = "47.79.145.69".to_string();
     let server_port = 1005;
     let uuid = Uuid::parse_str("d39c46e2-71c1-49aa-b9a8-419ef924ed6b").unwrap();
     let password = "4gYk7WzL9q3e".to_string();
-    
+
     println!("QUIC 服务器配置: {}:{}", server_addr, server_port);
-    
+
     // 创建系统解析器
     let resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
-    
+
     // 统计对象
     let stat = forward::StatHandle::default();
-    
+
     // 创建 TUIC 处理器选项
     let tuic_options = tuic::HandlerOptions {
         name: "tuic-client".to_string(),
@@ -1283,17 +1294,17 @@ pub async fn start_quic_server(
         max_open_stream: VarInt::from(100u32),
         gc_interval: Duration::from_secs(30),
         gc_lifetime: Duration::from_secs(60),
-        send_window: 16777216,  
-        receive_window: VarInt::from(4194304u32),  
+        send_window: 16777216,
+        receive_window: VarInt::from(4194304u32),
         skip_cert_verify: true,
         max_udp_relay_packet_size: 1500,
         ip: Some(String::from("45.196.238.135")),
         sni: Some(String::from("www.bing.com")),
     };
-    
+
     // 创建 TUIC 处理器
     let tuic_handler = Arc::new(tuic::Handler::new(tuic_options, resolver.clone()));
-    
+
     // 创建 DoH 工厂时使用 TUIC 处理器作为代理链路
     println!("🔍 配置文件中的DoH服务器: {}", app_config.dns.doh);
     let doh_url = app_config.dns.doh.parse().unwrap();
@@ -1313,7 +1324,7 @@ pub async fn start_quic_server(
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
- 
+
     // 创建直连转发处理器
     let direct_forward_handler = Arc::new(forward::StreamForwardHandler {
         outbound: Arc::downgrade(&direct_outbound_factory) as Weak<dyn StreamOutboundFactory>,
@@ -1358,22 +1369,23 @@ pub async fn start_quic_server(
         let proxy_handle = builder
             .add_action(proxy_action)
             .expect("Failed to add proxy action");
-            
+
         // 创建一个BTreeMap来映射动作名称到ActionHandle
         let mut action_map = std::collections::BTreeMap::new();
         action_map.insert("direct", direct_handle);
         action_map.insert("proxy", proxy_handle);
-        
+
         // 尝试从rules.txt文件加载规则
         let quanx_rules = load_quanx_rules_from_file("rules.txt");
-        
+
         // 计算域名规则数量（不包括GeoIP规则）
-        let domain_rules_count = quanx_rules.iter()
+        let domain_rules_count = quanx_rules
+            .iter()
             .filter(|rule| !rule.starts_with("geoip"))
             .count();
-        
+
         println!("📊 域名规则总数: {}", domain_rules_count);
-        
+
         // 读取GeoIP数据库
         let geoip_db = match std::fs::read(&app_config.client.geoip_db_path) {
             Ok(data) => {
@@ -1385,19 +1397,19 @@ pub async fn start_quic_server(
                 None
             }
         };
-        
+
         // 使用quanx_filter构建完整规则集
         if let Some(rule_set) = RuleSet::load_quanx_filter(
             quanx_rules.iter().map(|s| s.as_str()),
             &action_map,
-            geoip_db
+            geoip_db,
         ) {
             println!("✅ 使用quanx_filter成功创建规则集");
-            
+
             let mut rule_set = rule_set;
             let resolving_rule_id = domain_rules_count as u32 + 1;
             rule_set.first_resolving_rule_id = Some(resolving_rule_id);
-            
+
             // 创建分发器
             let fallback_action = Action {
                 tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
@@ -1407,45 +1419,45 @@ pub async fn start_quic_server(
             builder.build(rule_set, fallback_action, me.clone())
         } else {
             println!("❌ 无法创建域名规则集");
-            
+
             let fallback_action = Action {
                 tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
                 resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
             };
-            
+
             builder.build(RuleSet::default(), fallback_action, me.clone())
         }
     });
-    
+
     // 创建 SOCKS5 处理器
     let socks5_handler = Arc::new(Socks5Handler::new(
         None,
         Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>,
     ));
-    
+
     // 从配置中获取监听地址
     let listen_addr_v4 = app_config.client.listen_addr_v4.clone();
     let listen_addr_v6 = app_config.client.listen_addr_v6.clone();
-    
+
     println!(
         "QUIC proxy server listening on {} (IPv4) and {} (IPv6)",
         listen_addr_v4, listen_addr_v6
     );
-    
+
     // 创建监听器
     let handle_v4 = listen_tcp(
         Arc::downgrade(&socks5_handler) as Weak<dyn StreamHandler>,
         listen_addr_v4,
     )?;
-    
+
     let handle_v6 = listen_tcp(
         Arc::downgrade(&socks5_handler) as Weak<dyn StreamHandler>,
         listen_addr_v6,
     )?;
-    
+
     // 等待所有监听器完成
     tokio::try_join!(handle_v4, handle_v6)?;
-    
+
     Ok(())
 }
 
@@ -1454,25 +1466,28 @@ pub async fn start_hy2_server(
     app_config: config::AppConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("启动 Hysteria2 代理服务器");
-    
+
     // 从配置文件读取 Hysteria2 服务器配置
     let hy2_config = &app_config.hysteria2;
     let server_addr = hy2_config.server.clone();
     let server_port = hy2_config.port;
     let password = hy2_config.password.clone();
-    
+
     println!("Hysteria2 服务器配置: {}:{}", server_addr, server_port);
     println!("  - SNI: {:?}", hy2_config.sni);
     println!("  - Skip Cert Verify: {}", hy2_config.skip_cert_verify);
     println!("  - ALPN: {:?}", hy2_config.alpn);
-    println!("  - Disable MTU Discovery: {}", hy2_config.disable_mtu_discovery);
-    
+    println!(
+        "  - Disable MTU Discovery: {}",
+        hy2_config.disable_mtu_discovery
+    );
+
     // 创建系统解析器
     let resolver: Arc<dyn Resolver> = Arc::new(SystemResolver::new());
-    
+
     // 统计对象
     let stat = forward::StatHandle::default();
-    
+
     // 创建 Hysteria2 处理器选项，使用配置文件中的值
     let hy2_options = hysteria2::Hy2Options {
         name: "hy2-client".to_string(),
@@ -1481,14 +1496,18 @@ pub async fn start_hy2_server(
         password,
         sni: hy2_config.sni.clone(),
         skip_cert_verify: hy2_config.skip_cert_verify,
-        alpn: hy2_config.alpn.iter().map(|s| s.as_bytes().to_vec()).collect(),
+        alpn: hy2_config
+            .alpn
+            .iter()
+            .map(|s| s.as_bytes().to_vec())
+            .collect(),
         disable_mtu_discovery: hy2_config.disable_mtu_discovery,
         obfs: hy2_config.obfs.clone(),
     };
-    
+
     // 创建 Hysteria2 处理器
     let hy2_handler = Arc::new(hysteria2::Hy2Handler::new(hy2_options, resolver.clone()));
-    
+
     // 创建 DoH 工厂时使用 Hysteria2 处理器作为代理链路
     println!("🔍 配置文件中的DoH服务器: {}", app_config.dns.doh);
     let doh_url = app_config.dns.doh.parse().unwrap();
@@ -1507,7 +1526,7 @@ pub async fn start_hy2_server(
         bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
     });
- 
+
     // 创建直连转发处理器
     let direct_forward_handler = Arc::new(forward::StreamForwardHandler {
         outbound: Arc::downgrade(&direct_outbound_factory) as Weak<dyn StreamOutboundFactory>,
@@ -1552,22 +1571,23 @@ pub async fn start_hy2_server(
         let proxy_handle = builder
             .add_action(proxy_action)
             .expect("Failed to add proxy action");
-            
+
         // 创建一个BTreeMap来映射动作名称到ActionHandle
         let mut action_map = std::collections::BTreeMap::new();
         action_map.insert("direct", direct_handle);
         action_map.insert("proxy", proxy_handle);
-        
+
         // 尝试从rules.txt文件加载规则
         let quanx_rules = load_quanx_rules_from_file("rules.txt");
-        
+
         // 计算域名规则数量（不包括GeoIP规则）
-        let domain_rules_count = quanx_rules.iter()
+        let domain_rules_count = quanx_rules
+            .iter()
             .filter(|rule| !rule.starts_with("geoip"))
             .count();
-        
+
         println!("📊 域名规则总数: {}", domain_rules_count);
-        
+
         // 读取GeoIP数据库
         let geoip_db = match std::fs::read(&app_config.client.geoip_db_path) {
             Ok(data) => {
@@ -1579,19 +1599,19 @@ pub async fn start_hy2_server(
                 None
             }
         };
-        
+
         // 使用quanx_filter构建完整规则集
         if let Some(rule_set) = RuleSet::load_quanx_filter(
             quanx_rules.iter().map(|s| s.as_str()),
             &action_map,
-            geoip_db
+            geoip_db,
         ) {
             println!("✅ 使用quanx_filter成功创建规则集");
-            
+
             let mut rule_set = rule_set;
             let resolving_rule_id = domain_rules_count as u32 + 1;
             rule_set.first_resolving_rule_id = Some(resolving_rule_id);
-            
+
             // 创建分发器
             let fallback_action = Action {
                 tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
@@ -1601,44 +1621,44 @@ pub async fn start_hy2_server(
             builder.build(rule_set, fallback_action, me.clone())
         } else {
             println!("❌ 无法创建域名规则集");
-            
+
             let fallback_action = Action {
                 tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
                 resolver: Arc::downgrade(&proxy_resolver) as Weak<dyn Resolver>,
             };
-            
+
             builder.build(RuleSet::default(), fallback_action, me.clone())
         }
     });
-    
+
     // 创建 SOCKS5 处理器
     let socks5_handler = Arc::new(Socks5Handler::new(
         None,
         Arc::downgrade(&rule_dispatcher) as Weak<dyn StreamHandler>,
     ));
-    
+
     // 从配置中获取监听地址
     let listen_addr_v4 = app_config.client.listen_addr_v4.clone();
     let listen_addr_v6 = app_config.client.listen_addr_v6.clone();
-    
+
     println!(
         "Hysteria2 proxy server listening on {} (IPv4) and {} (IPv6)",
         listen_addr_v4, listen_addr_v6
     );
-    
+
     // 创建监听器
     let handle_v4 = listen_tcp(
         Arc::downgrade(&socks5_handler) as Weak<dyn StreamHandler>,
         listen_addr_v4,
     )?;
-    
+
     let handle_v6 = listen_tcp(
         Arc::downgrade(&socks5_handler) as Weak<dyn StreamHandler>,
         listen_addr_v6,
     )?;
-    
+
     // 等待所有监听器完成
     tokio::try_join!(handle_v4, handle_v6)?;
-    
+
     Ok(())
 }

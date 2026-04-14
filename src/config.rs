@@ -194,7 +194,7 @@ impl ServerConfig {
             ))
         }
     }
-    pub fn create_fixed_adrr(&self) -> impl Fn() -> Pin<Box<dyn Future<Output = DestinationAddr> + Send>> + Clone {
+    pub fn create_fixed_adrr(&self) -> impl Fn() -> Pin<Box<dyn Future<Output = DestinationAddr> + Send>> + Clone + use<> {
         let server_config_clone = self.clone();
         move || {
             let config = server_config_clone.clone();
@@ -244,7 +244,7 @@ impl ServerConfig {
     }
 
     // 新增专门处理IPv6地址的方法
-    pub fn create_fixed_ipv6_adrr(&self) -> impl Fn() -> Pin<Box<dyn Future<Output = Option<DestinationAddr>> + Send>> + Clone {
+    pub fn create_fixed_ipv6_adrr(&self) -> impl Fn() -> Pin<Box<dyn Future<Output = Option<DestinationAddr>> + Send>> + Clone + use<> {
         let server_config_clone = self.clone();
         move || {
             let config = server_config_clone.clone();
