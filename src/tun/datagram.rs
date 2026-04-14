@@ -180,6 +180,27 @@ impl TunDatagramSession {
                                 .query()
                                 .map(|q| q.name().to_ascii())
                                 .unwrap_or_else(|| "未知域名".to_string());
+                                
+                            let query_type = msg.query().map(|q| q.query_type());
+                            
+                            // 统一拦截 AAAA 和 HTTPS 类型的查询，直接回应 NOERROR 即刻阻断
+                            // 这会导致系统认为该域名不存在 IPv6 记录，完全强制退回 IPv4 进行直连或代理映射
+                            if query_type == Some(RecordType::AAAA) || query_type == Some(RecordType::HTTPS) {
+                                println!("🚫 忽略不必要的 DNS 查询 {:?} ({}): 直接返回空包拦截", query_type.unwrap(), query_domain);
+                                let mut resp = hickory_proto::op::Message::new();
+                                resp.set_id(msg.id());
+                                resp.set_message_type(hickory_proto::op::MessageType::Response);
+                                resp.add_queries(msg.queries().iter().map(|x| x.to_owned()));
+                                resp.set_recursion_available(true);
+                                resp.set_authoritative(false);
+                                resp.set_recursion_desired(msg.recursion_desired());
+                                resp.set_response_code(hickory_proto::op::ResponseCode::NoError); // 改为 NoError, 0 answers
+                                
+                                if let Ok(data) = resp.to_vec() {
+                                    let _ = ls_dns.send((data, pkt.dst_addr, pkt.src_addr)).await;
+                                }
+                                continue 'read_packet;
+                            }
 
                             // 辅助函数：检查域名是否在直连列表中
                             let is_direct_domain =
