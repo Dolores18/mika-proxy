@@ -1,6 +1,6 @@
 /target
 /Cargo.lock
-
+clash-lib/
 # 忽略二进制文件
 /proxy
 /proxy-server
