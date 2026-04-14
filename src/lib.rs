@@ -1095,11 +1095,91 @@ pub async fn start_tun1_server(
         ss_ipv6_factory,
     ));
 
-    // 创建 StreamForwardHandler 实例
-    let tcp_handler = Arc::new(forward::StreamForwardHandler {
+    // 创建直连出站工厂
+    let direct_outbound_factory = Arc::new(SocketOutboundFactory {
+        resolver: Arc::downgrade(&caching_resolver),
+        bind_addr_v4: Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+        bind_addr_v6: Some(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
+    });
+
+    // 创建直连转发处理器
+    let direct_forward_handler = Arc::new(forward::StreamForwardHandler {
+        outbound: Arc::downgrade(&direct_outbound_factory) as Weak<dyn StreamOutboundFactory>,
+        request_timeout: 10000,
+        stat: stat.clone(),
+    });
+
+    // 创建代理转发处理器
+    let proxy_forward_handler = Arc::new(forward::StreamForwardHandler {
         outbound: Arc::downgrade(&dual_stack_factory) as Weak<dyn StreamOutboundFactory>,
         request_timeout: 10000,
         stat: stat.clone(),
+    });
+
+    // 创建带解析器的代理处理器
+    let proxy_with_resolver = Arc::new(StreamForwardResolver {
+        resolver: Arc::downgrade(&caching_resolver),
+        next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
+    });
+
+    // 创建规则分发器作为最终的 tcp_handler
+    let tcp_handler = Arc::new_cyclic(|me| {
+        let mut builder = RuleDispatcherBuilder::default();
+        builder.set_resolver(Some(Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>));
+
+        let direct_action = Action {
+            tcp_next: Arc::downgrade(&direct_forward_handler) as Weak<dyn StreamHandler>,
+            resolver: Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>,
+        };
+        let direct_handle = builder
+            .add_action(direct_action)
+            .expect("Failed to add direct action");
+
+        let proxy_action = Action {
+            tcp_next: Arc::downgrade(&proxy_forward_handler) as Weak<dyn StreamHandler>,
+            resolver: Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>,
+        };
+        let proxy_handle = builder
+            .add_action(proxy_action)
+            .expect("Failed to add proxy action");
+
+        let mut action_map = std::collections::BTreeMap::new();
+        action_map.insert("direct", direct_handle);
+        action_map.insert("proxy", proxy_handle);
+
+        let quanx_rules = load_quanx_rules_from_file("rules.txt");
+        let domain_rules_count = quanx_rules
+            .iter()
+            .filter(|r| !r.starts_with("geoip"))
+            .count();
+
+        let geoip_db = match std::fs::read(&app_config.client.geoip_db_path) {
+            Ok(data) => Some(Arc::from(data)),
+            Err(e) => {
+                error!("⚠️ 无法加载 GeoIP 数据库: {}", e);
+                None
+            }
+        };
+
+        if let Some(rule_set) = RuleSet::load_quanx_filter(
+            quanx_rules.iter().map(|s| s.as_str()),
+            &action_map,
+            geoip_db,
+        ) {
+            let mut rule_set = rule_set;
+            rule_set.first_resolving_rule_id = Some(domain_rules_count as u32 + 1);
+            let fallback_action = Action {
+                tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
+                resolver: Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>,
+            };
+            builder.build(rule_set, fallback_action, me.clone())
+        } else {
+            let fallback_action = Action {
+                tcp_next: Arc::downgrade(&proxy_with_resolver) as Weak<dyn StreamHandler>,
+                resolver: Arc::downgrade(&caching_resolver) as Weak<dyn Resolver>,
+            };
+            builder.build(RuleSet::default(), fallback_action, me.clone())
+        }
     });
 
     // 创建UDP socket出站工厂
